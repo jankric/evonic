@@ -12,7 +12,7 @@
       "label": "Exa API Key",
       "type": "string",
       "default": "",
-      "description": "Your Exa AI API key. Get one at https://exa.ai"
+      "description": "Optional Exa API key for higher rate limits. Free tier works without a key. Get one at https://exa.ai"
     },
     {
       "name": "max_results",

@@ -3,45 +3,17 @@
     "type": "function",
     "function": {
       "name": "exa_search",
-      "description": "Search the web using Exa AI. Returns relevant web pages with titles, URLs, and optionally text content. Supports neural (meaning-based) and keyword search modes.",
+      "description": "Search the web using Exa AI. Returns relevant web pages with titles, URLs, and text highlights. Use natural language queries describing the ideal page you're looking for. Include 'category:people' or 'category:company' to search LinkedIn profiles or companies.",
       "parameters": {
         "type": "object",
         "properties": {
           "query": {
             "type": "string",
-            "description": "The search query. For neural mode, use natural language descriptions of what you're looking for. For keyword mode, use traditional search terms."
+            "description": "Natural language search query. Describe the ideal page, not just keywords. E.g. 'blog post comparing React and Vue performance' or 'category:people John Doe software engineer'."
           },
           "num_results": {
             "type": "integer",
-            "description": "Number of results to return (1-50). Default: 10."
-          },
-          "type": {
-            "type": "string",
-            "enum": ["neural", "keyword", "auto"],
-            "description": "Search type. 'neural' for semantic/meaning-based search, 'keyword' for traditional keyword matching, 'auto' to let Exa decide. Default: 'auto'."
-          },
-          "include_text": {
-            "type": "boolean",
-            "description": "Whether to include page text content in results. Default: false (faster). Set true to get page content inline."
-          },
-          "include_domains": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Only return results from these domains (e.g. ['github.com', 'stackoverflow.com'])."
-          },
-          "exclude_domains": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Exclude results from these domains."
-          },
-          "start_published_date": {
-            "type": "string",
-            "description": "Only return results published after this date (ISO format, e.g. '2024-01-01')."
-          },
-          "category": {
-            "type": "string",
-            "enum": ["company", "research paper", "news", "pdf", "github", "tweet", "personal site", "linkedin profile"],
-            "description": "Filter results by category."
+            "description": "Number of results to return (1-100). Default: 10."
           }
         },
         "required": ["query"]
@@ -52,18 +24,18 @@
     "type": "function",
     "function": {
       "name": "exa_get_contents",
-      "description": "Fetch the text content of one or more web pages by their URLs. Useful for reading articles, documentation, or any web page content.",
+      "description": "Fetch the full text content of one or more web pages by URL. Use after exa_search when highlights are insufficient, or to read any known URL. Returns clean markdown content.",
       "parameters": {
         "type": "object",
         "properties": {
           "urls": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "List of URLs to fetch content from (max 10)."
+            "description": "List of URLs to fetch content from (max 10). Batch multiple URLs in one call."
           },
           "max_characters": {
             "type": "integer",
-            "description": "Maximum characters of text to extract per page. Default: 3000. Max: 10000."
+            "description": "Maximum characters of text to extract per page. Default: 3000."
           }
         },
         "required": ["urls"]
@@ -74,7 +46,7 @@
     "type": "function",
     "function": {
       "name": "exa_find_similar",
-      "description": "Find web pages similar to a given URL. Useful for discovering related content, alternatives, or competitors.",
+      "description": "Find web pages similar to a given URL. Useful for discovering related content, alternatives, or competitors. (Uses semantic search internally.)",
       "parameters": {
         "type": "object",
         "properties": {
@@ -84,21 +56,7 @@
           },
           "num_results": {
             "type": "integer",
-            "description": "Number of similar results to return (1-50). Default: 10."
-          },
-          "include_text": {
-            "type": "boolean",
-            "description": "Whether to include page text content in results. Default: false."
-          },
-          "include_domains": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Only return results from these domains."
-          },
-          "exclude_domains": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Exclude results from these domains."
+            "description": "Number of similar results to return (1-100). Default: 10."
           }
         },
         "required": ["url"]

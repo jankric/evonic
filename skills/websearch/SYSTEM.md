@@ -1,44 +1,34 @@
-# Web Search (Exa) Skill
+# Web Search Skill
 
-## Overview
-You now have web search capabilities powered by Exa AI. You can search the internet, read web page contents, and find similar pages.
+You have web search capabilities via Exa AI. Use these tools to find current information from the internet.
 
 ## Available Tools
 
 ### `exa_search`
-Search the web with a query. Supports neural (semantic) and keyword search.
+Search the web with natural language queries. Describe the ideal page you're looking for rather than using keywords.
 
-**Best practices:**
-- Use **natural language** queries for neural mode: "latest advances in quantum computing 2025"
-- Use **keyword** queries for specific lookups: "python requests library timeout"
-- Use `type: "auto"` (default) to let Exa pick the best mode
-- Set `include_text: true` if you need page content inline (slower but saves a follow-up call)
-- Use `include_domains` to restrict to trusted sources
-- Use `start_published_date` for recent content
+**Tips:**
+- Use descriptive queries: "blog post comparing React and Vue performance" not "React vs Vue"
+- Add `category:people` or `category:company` to search LinkedIn profiles or companies
+- Results include title, URL, and text highlights
 
 ### `exa_get_contents`
-Fetch and read the text content of web pages by URL. Use this after `exa_search` to read specific results in detail.
+Fetch full text content from web pages by URL. Use after `exa_search` when highlights are insufficient, or to read any known URL.
 
-**Best practices:**
-- Pass up to 10 URLs at once for efficiency
-- Use `max_characters` to control response size (default 3000)
-- Good for reading articles, docs, blog posts
+- Batch up to 10 URLs in one call
+- Returns clean markdown content
+- Use `max_characters` to control response size
 
 ### `exa_find_similar`
-Find pages similar to a given URL. Great for discovering alternatives, related resources, or competitor analysis.
+Find pages similar to a given URL. Useful for discovering related content, alternatives, or competitors.
 
-## Usage Patterns
+## Usage Pattern
 
-**Research a topic:**
-1. `exa_search` with a descriptive query
-2. `exa_get_contents` on the most relevant URLs
-
-**Find alternatives:**
-1. `exa_find_similar` with a known URL
-
-**Get recent news:**
-1. `exa_search` with `category: "news"` and `start_published_date`
+1. **Search first** with `exa_search` to find relevant pages
+2. **Read details** with `exa_get_contents` if highlights aren't enough
+3. **Explore related** with `exa_find_similar` to discover more
 
 ## Notes
-- Results include title, URL, published date, and optionally text content
-- The API key is configured in the skill settings — if you get auth errors, ask the admin to set the Exa API key
+- Works without API key (free tier with rate limiting)
+- If an API key is configured, it enables higher rate limits
+- Results are from the live web — always current

@@ -1,5 +1,5 @@
 """
-Exa get contents tool — fetch and extract text from web pages by URL.
+Exa get contents tool — fetch and extract text from web pages via Exa MCP endpoint.
 """
 
 import os
@@ -24,34 +24,8 @@ def _get_api_key() -> str:
     return os.environ.get('EXA_API_KEY', '')
 
 
-def _format_results(raw: dict) -> dict:
-    results = []
-    for r in raw.get('results', []):
-        item = {
-            'title': r.get('title', ''),
-            'url': r.get('url', ''),
-        }
-        if r.get('text'):
-            item['text'] = r['text']
-        if r.get('publishedDate'):
-            item['published_date'] = r['publishedDate']
-        if r.get('author'):
-            item['author'] = r['author']
-        results.append(item)
-    return {
-        'status': 'success',
-        'total_results': len(results),
-        'results': results,
-    }
-
-
 def execute(agent: dict, args: dict) -> dict:
     api_key = _get_api_key()
-    if not api_key:
-        return {
-            'status': 'error',
-            'message': 'Exa API key not configured. Ask the admin to set it in Web Search skill settings.',
-        }
 
     urls = args.get('urls')
     if not urls or not isinstance(urls, list) or len(urls) == 0:
@@ -62,17 +36,10 @@ def execute(agent: dict, args: dict) -> dict:
     max_characters = args.get('max_characters', 3000)
 
     try:
-        raw = get_contents(
-            api_key=api_key,
-            urls=urls,
-            max_characters=max_characters,
-        )
-        return _format_results(raw)
+        return get_contents(api_key=api_key, urls=urls, max_characters=max_characters)
     except ExaError as e:
-        if e.status_code == 401:
-            return {'status': 'error', 'message': 'Invalid Exa API key. Check the key in skill settings.'}
         if e.status_code == 429:
-            return {'status': 'error', 'message': 'Exa API rate limit exceeded. Try again in a moment.'}
-        return {'status': 'error', 'message': f'Exa API error ({e.status_code}): {e.message}'}
+            return {'status': 'error', 'message': 'Exa rate limit exceeded. Try again in a moment.'}
+        return {'status': 'error', 'message': f'Exa error ({e.status_code}): {e.message}'}
     except Exception as e:
         return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
