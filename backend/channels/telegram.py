@@ -114,12 +114,38 @@ class TelegramChannel(BaseChannel):
         channel_id = self.channel_id
         agent_id = self.agent_id
 
+        config = self.config  # capture for closure access
+
         async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not update.message:
                 return
 
             try:
                 user_id = str(update.message.chat_id)
+                thread_id = getattr(update.message, 'message_thread_id', None)
+
+                # --- Forum topic routing ---
+                resolved_agent_id = agent_id  # default from closure
+                topic_routing = config.get('topic_routing') or {}
+
+                if thread_id and topic_routing:
+                    mapped = topic_routing.get(str(thread_id))
+                    if mapped:
+                        from models.db import db as _db
+                        mapped_agent = _db.get_agent(mapped)
+                        if mapped_agent and mapped_agent.get('enabled', True):
+                            resolved_agent_id = mapped
+                        else:
+                            _logger.warning(
+                                "Topic %s mapped to agent %s but agent not found/disabled, "
+                                "falling back to default", thread_id, mapped)
+
+                # Session key: include thread_id for isolation
+                if thread_id:
+                    session_user_id = f"{user_id}:t:{thread_id}"
+                else:
+                    session_user_id = user_id
+
                 text = strip_system_tags(update.message.text or update.message.caption or '')
                 image_url = None
 
@@ -133,7 +159,7 @@ class TelegramChannel(BaseChannel):
 
                 if has_photo or has_image_doc:
                     from models.db import db
-                    agent = db.get_agent(agent_id)
+                    agent = db.get_agent(resolved_agent_id)
                     if agent and agent.get('vision_enabled'):
                         if has_photo:
                             photo = update.message.photo[-1]
@@ -159,11 +185,11 @@ class TelegramChannel(BaseChannel):
                     return
 
                 from models.db import db
-                session_id = db.get_or_create_session(agent_id, user_id, channel_id)
+                session_id = db.get_or_create_session(resolved_agent_id, session_user_id, channel_id)
 
                 # Check if bot is enabled for this session
-                if not db.is_session_bot_enabled(session_id, agent_id=agent_id):
-                    db.add_chat_message(session_id, 'user', text or '[Image]', agent_id=agent_id)
+                if not db.is_session_bot_enabled(session_id, agent_id=resolved_agent_id):
+                    db.add_chat_message(session_id, 'user', text or '[Image]', agent_id=resolved_agent_id)
                     return
 
                 # Detect reply/quote: include replied message content as context
@@ -190,7 +216,7 @@ class TelegramChannel(BaseChannel):
                         pass  # Silently skip if we can't resolve the reply
 
                 result = agent_runtime.handle_message(
-                    agent_id, user_id, final_text, channel_id, image_url=image_url
+                    resolved_agent_id, session_user_id, final_text, channel_id, image_url=image_url
                 )
                 if result.get('buffered'):
                     return  # message buffered, response will come from the first caller
@@ -206,7 +232,7 @@ class TelegramChannel(BaseChannel):
                 event_stream.emit('message_sent', {
                     'channel_type': 'telegram',
                     'channel_id': channel_id,
-                    'external_user_id': user_id,
+                    'external_user_id': session_user_id,
                     'message': response,
                 })
             except Exception as e:
