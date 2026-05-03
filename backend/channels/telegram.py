@@ -123,6 +123,14 @@ class TelegramChannel(BaseChannel):
             try:
                 user_id = str(update.message.chat_id)
                 thread_id = getattr(update.message, 'message_thread_id', None)
+                is_topic = getattr(update.message, 'is_topic_message', None)
+                _logger.info(
+                    "[TG-FORUM-DEBUG] chat_id=%s thread_id=%s is_topic=%s "
+                    "chat_type=%s text=%r",
+                    user_id, thread_id, is_topic,
+                    update.message.chat.type if update.message.chat else '?',
+                    (update.message.text or '')[:50]
+                )
 
                 # --- Forum topic routing ---
                 resolved_agent_id = agent_id  # default from closure
@@ -226,6 +234,10 @@ class TelegramChannel(BaseChannel):
                     # user's /command text, which is noisy and unnecessary.
                     is_cmd = text.lstrip().startswith('/')
                     reply_kwargs = {} if is_cmd else {'reply_to_message_id': update.message.message_id}
+                    # Forum topics: explicitly pass message_thread_id so the reply
+                    # lands in the correct topic thread.
+                    if thread_id:
+                        reply_kwargs['message_thread_id'] = thread_id
                     for chunk in _split_message(response):
                         await update.message.reply_text(chunk, **reply_kwargs)
                 from backend.event_stream import event_stream
