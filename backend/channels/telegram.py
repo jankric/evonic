@@ -5,7 +5,7 @@ import logging
 import re
 import time
 import threading
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 from backend.channels.base import BaseChannel, strip_system_tags
 
 _logger = logging.getLogger(__name__)
@@ -16,6 +16,25 @@ def _strip_markdown(text: str) -> str:
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)  # headers
     text = re.sub(r'\*+', '', text)  # bold/italic
     return text
+
+
+def _parse_forum_user_id(composite_id: str) -> Tuple[str, Optional[int]]:
+    """Parse a composite user ID that may contain a forum thread_id.
+
+    Format:
+        "{chat_id}:t:{thread_id}" -> (chat_id, thread_id)
+        "{chat_id}"               -> (chat_id, None)
+
+    Returns:
+        Tuple of (chat_id_str, thread_id_or_none).
+    """
+    if ':t:' in composite_id:
+        parts = composite_id.split(':t:', 1)
+        try:
+            return parts[0], int(parts[1])
+        except (ValueError, IndexError):
+            return composite_id, None
+    return composite_id, None
 
 
 def _split_message(text: str, max_len: int = 4050) -> list:
