@@ -227,6 +227,18 @@ class AnswerExtractor:
                 "parse_error": None,
                 "extraction_method": "disabled"
             }
+
+        # Skip extraction if response is an LLM API error — no point extracting from error messages
+        if response and ('LLM API error' in response or 'temporarily unavailable' in response or 'invalid_request' in response):
+            return {
+                "success": False,
+                "extracted": "",
+                "expected_format": "raw",
+                "raw_pass2": "",
+                "pass2_prompt": "",
+                "parse_error": "Skipped: response is an API error message",
+                "extraction_method": "skipped_error"
+            }
         
         # Get extraction prompt (include question for context)
         prompt_data = self._get_extraction_prompt(domain, level, response, question)

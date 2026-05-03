@@ -47,7 +47,7 @@ class AgentMixin:
         return agent['id']
 
     def update_agent(self, agent_id: str, data: Dict[str, Any]) -> bool:
-        allowed = {'name', 'description', 'model', 'vision_enabled',
+        allowed = {'name', 'description', 'model', 'default_model_id', 'vision_enabled',
                    'summarize_threshold', 'summarize_tail', 'summarize_prompt',
                    'message_buffer_seconds', 'inject_agent_id', 'inject_datetime',
                    'send_intermediate_responses', 'outbound_buffer_seconds', 'enable_agent_state', 'workspace',

@@ -1320,7 +1320,7 @@ class AgentRuntime:
                 if last_user:
                     if self._is_approval(last_user):
                         ms.set_mode('execute', reason='user approved')
-                    elif last_user.startswith('[System/Task]'):
+                    elif self._extract_text(last_user).startswith('[System/Task]'):
                         # System-triggered task (e.g. from a plugin): reset to fresh plan mode
                         # so the agent can start a new plan cycle for this task
                         # instead of being stuck in a stale plan from a previous task.
@@ -1457,7 +1457,8 @@ class AgentRuntime:
             if msg.get("content") and msg["content"] != "[Image]":
                 parts.append({"type": "text", "text": msg["content"]})
             parts.append({"type": "image_url", "image_url": {"url": msg_image}})
-            if not parts[0].get("text") if parts else True:
+            # Only add default text if there's no text part at all
+            if not any(p.get("type") == "text" for p in parts):
                 parts.insert(0, {"type": "text", "text": "What is in this image?"})
             entry["content"] = parts
         elif msg.get("content"):
@@ -1487,8 +1488,21 @@ class AgentRuntime:
     ]
 
     @classmethod
-    def _is_approval(cls, text: str) -> bool:
+    @staticmethod
+    def _extract_text(content) -> str:
+        """Extract plain text from a message content that may be a string or multipart list."""
+        if isinstance(content, list):
+            return ' '.join(p.get('text', '') if isinstance(p, dict) else str(p) for p in content)
+        return content if isinstance(content, str) else ''
+
+    @classmethod
+    def _is_approval(cls, text) -> bool:
         """Return True if the text looks like a user approval of a plan."""
+        # Handle multipart messages (e.g. image + text) — extract text parts only
+        if isinstance(text, list):
+            text = ' '.join(p.get('text', '') if isinstance(p, dict) else str(p) for p in text)
+        if not isinstance(text, str):
+            return False
         lowered = text.strip().lower()
         return any(pat in lowered for pat in cls._APPROVAL_PATTERNS)
 

@@ -698,23 +698,27 @@ def run_tool_loop(agent: Dict[str, Any],
             fn_name = tc['function']['name']
             raw_args_str = tc['function'].get('arguments', '')
             try:
-                args = json.loads(raw_args_str)
+                args = json.loads(raw_args_str) if raw_args_str.strip() else {}
             except (json.JSONDecodeError, TypeError):
-                _logger.warning(
-                    "Failed to parse tool call arguments for '%s' (len=%d) "
-                    "— arguments may have been truncated by max_tokens",
-                    fn_name, len(raw_args_str))
-                _parse_failed[tc_idx] = json.dumps({
-                    'error': (
-                        f"Tool call arguments for '{fn_name}' could not be parsed — "
-                        "the generated JSON was likely truncated because the content "
-                        "was too large. Please retry using smaller chunks (e.g. use "
-                        "str_replace for targeted edits instead of rewriting the "
-                        "entire file with write_file)."
-                    )
-                })
-                _tool_records.append((tc, fn_name, None, {}))
-                continue
+                # If args are empty/blank, fall back to {} instead of erroring (handles no-param tools)
+                if not raw_args_str or not raw_args_str.strip():
+                    args = {}
+                else:
+                    _logger.warning(
+                        "Failed to parse tool call arguments for '%s' (len=%d) "
+                        "\u2014 arguments may have been truncated by max_tokens",
+                        fn_name, len(raw_args_str))
+                    _parse_failed[tc_idx] = json.dumps({
+                        'error': (
+                            f"Tool call arguments for '{fn_name}' could not be parsed \u2014 "
+                            "the generated JSON was likely truncated because the content "
+                            "was too large. Please retry using smaller chunks (e.g. use "
+                            "str_replace for targeted edits instead of rewriting the "
+                            "entire file with write_file)."
+                        )
+                    })
+                    _tool_records.append((tc, fn_name, None, {}))
+                    continue
 
             pt = _param_type_map.get(fn_name, {})
             timeline.append({"type": "tool_call", "tool": fn_name, "args": args, "param_types": pt})
