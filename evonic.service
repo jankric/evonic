@@ -1,0 +1,15 @@
+[Unit]
+Description=Evonic AI Agent Platform
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/mimin/evonic
+ExecStart=/home/mimin/evonic/.venv/bin/python3 /home/mimin/evonic/app.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
