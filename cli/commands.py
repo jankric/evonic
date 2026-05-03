@@ -1079,8 +1079,9 @@ def agent_add(agent_id, name, description=None, model=None, skillset=None):
         sys.exit(1)
 
     import re
-    if not re.match(r'^[a-zA-Z0-9_]+$', agent_id):
-        print("Error: Invalid ID. Use only alphanumeric characters and underscores.")
+    agent_id = agent_id.strip().lower()
+    if not re.match(r'^[a-z0-9_]+$', agent_id):
+        print("Error: Invalid ID. Use only lowercase alphanumeric characters and underscores (snake_case).")
         sys.exit(1)
 
     db = _get_db()
@@ -1405,6 +1406,15 @@ def setup_wizard():
     """Interactive first-time setup wizard for Evonic (CLI)."""
     import getpass
 
+    # ── Pipe-safe input: when stdin is piped (e.g., curl | bash → evonic setup),
+    #    rebind sys.stdin to /dev/tty so input() and getpass.getpass()
+    #    read directly from the terminal instead of hitting EOF. ──
+    if not sys.stdin.isatty():
+        try:
+            sys.stdin = open('/dev/tty', 'r')
+        except OSError:
+            pass  # No /dev/tty available; existing EOFError handlers will abort gracefully
+
     db = _get_db()
     if db.has_super_agent():
         print("Setup is already complete. Super agent already exists.")
@@ -1523,15 +1533,15 @@ def setup_wizard():
         sys.exit(1)
 
     import re
-    default_id = re.sub(r'[^a-zA-Z0-9_]', '_', agent_name.lower())
+    default_id = re.sub(r'[^a-z0-9_]', '_', agent_name.lower())
     default_id = re.sub(r'_+', '_', default_id).strip('_') or 'admin'
     try:
-        agent_id = input(f"  Agent ID [{default_id}]: ").strip() or default_id
+        agent_id = input(f"  Agent ID [{default_id}]: ").strip().lower() or default_id
     except (EOFError, KeyboardInterrupt):
         print("\n  Aborted.")
         sys.exit(1)
-    if not re.match(r'^[a-zA-Z0-9_]+$', agent_id):
-        print("  Agent ID must be alphanumeric and underscores only.")
+    if not re.match(r'^[a-z0-9_]+$', agent_id):
+        print("  Agent ID must be lowercase alphanumeric and underscores only (snake_case).")
         sys.exit(1)
 
     # ── Step 7: Communication style ──
@@ -1644,7 +1654,44 @@ def setup_wizard():
     print()
     print(f"  Super agent '{agent_name}' created successfully.")
 
-    # ── Step 10: Password Setup ──
+    # ── Step 10: Telegram Binding ──
+    bot_token = ""
+    print()
+    print("  Telegram Integration")
+    print("  " + "─" * 30)
+    print("  Connect a Telegram bot so you can chat with your")
+    print("  super agent directly through Telegram.")
+    print()
+    try:
+        telegram_choice = input("  Connect Telegram bot? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n  Skipped.")
+        telegram_choice = "n"
+    if telegram_choice in ("y", "yes"):
+        try:
+            bot_token = getpass.getpass("  Telegram Bot Token: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Aborted.")
+            sys.exit(1)
+        if bot_token:
+            try:
+                db.create_channel({
+                    "agent_id": agent_id,
+                    "type": "telegram",
+                    "name": "Telegram Bot",
+                    "config": {"bot_token": bot_token},
+                    "enabled": True,
+                })
+                print("  Telegram bot connected successfully.")
+                print(f"  You can now chat with '{agent_name}' via Telegram.")
+            except Exception as e:
+                print(f"  Failed to connect Telegram bot: {e}")
+        else:
+            print("  No token provided. Skipping Telegram setup.")
+    else:
+        print("  Skipped. You can add Telegram later from the web dashboard.")
+
+    # ── Step 11: Password Setup ──
     from werkzeug.security import generate_password_hash
     print()
     print("  Set Web Dashboard Password")
@@ -1690,7 +1737,7 @@ def setup_wizard():
         "keep_releases": 3,
         "python_bin": "python3",
         "uv_bin": None,
-        "telegram_bot_token": "",
+        "telegram_bot_token": bot_token,
         "telegram_chat_id": "",
     }
     sup_cfg_dir = os.path.join(ROOT, "supervisor")
@@ -2341,7 +2388,7 @@ def _get_supervisor_pid():
         return None
 
 
-def update_server(check_only=False, force=False, tag=None, rollback_flag=False):
+def update_server(check_only=False, force=False, tag=None, rollback_flag=False, nightly=False):
     """
     Trigger or run a self-update.
 
@@ -2350,6 +2397,7 @@ def update_server(check_only=False, force=False, tag=None, rollback_flag=False):
     - rollback_flag: swap back to the previous release
     - default: signal running supervisor (SIGUSR1) or run update inline
     - tag: target a specific tag instead of latest
+    - nightly: fetch origin/main and run full update lifecycle (no tags)
     """
     sup = _load_supervisor_module()
     cfg_path = os.path.join(ROOT, 'supervisor', 'config.json')
@@ -2362,6 +2410,17 @@ def update_server(check_only=False, force=False, tag=None, rollback_flag=False):
         sys.exit(0 if ok else 1)
 
     if check_only:
+        if nightly:
+            print('Fetching origin/main...')
+            ok, err = sup.git_fetch_branch(app_root, 'main')
+            if not ok:
+                print(f'Fetch failed: {err}')
+                sys.exit(1)
+            rc, sha, _ = sup._git(app_root, ['rev-parse', '--short', 'origin/main'])
+            current = sup.get_current_release(app_root)
+            print(f'Current      : {current or "(none — flat repo mode)"}')
+            print(f'origin/main  : {sha if rc == 0 else "unknown"}')
+            return
         print('Fetching tags...')
         sup.git_fetch_tags(app_root)
         current = sup.get_current_release(app_root)
@@ -2373,6 +2432,18 @@ def update_server(check_only=False, force=False, tag=None, rollback_flag=False):
         elif latest:
             print('Already up to date.')
         return
+
+    if nightly:
+        # Nightly: always run inline (no supervisor signal)
+        print('Fetching origin/main (nightly)...')
+        ok, err = sup.git_fetch_branch(app_root, 'main')
+        if not ok:
+            print(f'Fetch failed: {err}')
+            sys.exit(1)
+        rc, sha, _ = sup._git(app_root, ['rev-parse', '--short', 'origin/main'])
+        print(f'Updating to nightly (origin/main @ {sha if rc == 0 else "unknown"})...')
+        ok = sup.run_update('main', cfg, None, skip_verify=True, nightly=True)
+        sys.exit(0 if ok else 1)
 
     # Signal running supervisor for immediate check
     if not sup.is_windows():

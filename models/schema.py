@@ -413,6 +413,12 @@ class SchemaMixin:
             # Backfill existing agents: NULL → 1 (messaging enabled by default)
             cursor.execute("UPDATE agents SET agent_messaging_enabled = 1 WHERE agent_messaging_enabled IS NULL")
 
+            # Migration: add session_count cache column to eliminate N+1 dashboard queries
+            try:
+                cursor.execute("ALTER TABLE agents ADD COLUMN session_count INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+
             # Migration: enable inject_agent_id and inject_datetime for all existing agents
             cursor.execute("UPDATE agents SET inject_agent_id = 1 WHERE inject_agent_id = 0 OR inject_agent_id IS NULL")
             cursor.execute("UPDATE agents SET inject_datetime = 1 WHERE inject_datetime = 0 OR inject_datetime IS NULL")
@@ -460,7 +466,8 @@ class SchemaMixin:
                     enabled BOOLEAN DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+                    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+                    UNIQUE(agent_id, name)
                 )
             """)
 
@@ -554,6 +561,8 @@ class SchemaMixin:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_individual_results_test ON individual_test_results(test_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_agent ON channels(agent_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_agents_primary_channel ON agents(primary_channel_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_agents_last_active ON agents(last_active_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_runs_model_score ON evaluation_runs(model_name, overall_score, completed_at)")
 
             # ==================== Workplaces Tables ====================
 
@@ -646,6 +655,27 @@ class SchemaMixin:
 
         # Migrate chat data from main DB to per-agent DBs
         self._migrate_chat_to_agent_dbs()
+
+        # Backfill session_count for existing agents (idempotent)
+        self._backfill_session_counts()
+
+    def _backfill_session_counts(self):
+        """One-time backfill: compute session_count for all agents from per-agent chat DBs."""
+        import os
+        from models.chat import AGENTS_DIR, agent_chat_manager
+        with self._connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM agents")
+            agent_ids = [row[0] for row in cursor.fetchall()]
+        for aid in agent_ids:
+            try:
+                chat_db = agent_chat_manager.get(aid)
+                sc, _ = chat_db.get_counts()
+                with self._connect() as conn:
+                    conn.execute("UPDATE agents SET session_count = ? WHERE id = ?", (sc, aid))
+                    conn.commit()
+            except Exception:
+                pass
 
     def _migrate_chat_to_agent_dbs(self):
         """One-time migration: move chat_sessions/chat_messages from main DB to per-agent DBs."""

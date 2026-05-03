@@ -18,7 +18,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AGENTS_DIR = os.path.join(BASE_DIR, 'agents')
 WORKSPACE_DIR = os.path.join(BASE_DIR, 'shared', 'agents')
 
-SLUG_RE = re.compile(r'^[a-zA-Z0-9_]+$')
+SLUG_RE = re.compile(r'^[a-z0-9_]+$')
 
 
 def _kb_dir(agent_id: str) -> str:
@@ -121,9 +121,9 @@ def api_create_agent():
     if not db.has_super_agent():
         return jsonify({'error': 'Super agent must be set up before creating other agents.', 'setup_required': True}), 400
     data = request.get_json()
-    agent_id = data.get('id', '').strip()
+    agent_id = data.get('id', '').strip().lower()
     if not agent_id or not SLUG_RE.match(agent_id):
-        return jsonify({'error': 'Invalid ID. Use only alphanumeric characters and underscores.'}), 400
+        return jsonify({'error': 'Invalid ID. Use only lowercase alphanumeric characters and underscores (snake_case).'}), 400
     if db.get_agent(agent_id):
         return jsonify({'error': 'Agent ID already exists.'}), 400
     # Docker Sandbox only available for local workplace mode
@@ -445,7 +445,10 @@ def api_create_channel(agent_id):
     data['agent_id'] = agent_id
     if not data.get('type'):
         return jsonify({'error': 'Channel type is required'}), 400
-    chan_id = db.create_channel(data)
+    try:
+        chan_id = db.create_channel(data)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
     # Auto-start the channel after creation
     from backend.channels.registry import channel_manager
     try:
@@ -460,7 +463,10 @@ def api_create_channel(agent_id):
 @agents_bp.route('/api/agents/<agent_id>/channels/<channel_id>', methods=['PUT'])
 def api_update_channel(agent_id, channel_id):
     data = request.get_json()
-    db.update_channel(channel_id, data)
+    try:
+        db.update_channel(channel_id, data)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
     return jsonify({'success': True, 'channel': db.get_channel(channel_id)})
 
 
@@ -510,6 +516,41 @@ def api_unset_primary_channel(agent_id, channel_id):
         return jsonify({'error': 'This channel is not the primary channel'}), 400
     db.unset_primary_channel(agent_id)
     return jsonify({'success': True})
+
+
+# ==================== WhatsApp Bridge API ====================
+
+@agents_bp.route('/api/agents/<agent_id>/channels/<channel_id>/qr', methods=['GET'])
+def api_whatsapp_qr(agent_id, channel_id):
+    """Return QR code data for WhatsApp channel auth."""
+    from backend.channels.registry import channel_manager
+    instance = channel_manager.get_channel_instance(channel_id)
+    if not instance or instance.get_channel_type() != 'whatsapp':
+        return jsonify({'error': 'WhatsApp channel not running'}), 404
+    return jsonify(instance.get_qr())
+
+
+@agents_bp.route('/api/agents/<agent_id>/channels/<channel_id>/bridge-status', methods=['GET'])
+def api_whatsapp_bridge_status(agent_id, channel_id):
+    """Return Baileys bridge connection status."""
+    from backend.channels.registry import channel_manager
+    instance = channel_manager.get_channel_instance(channel_id)
+    if not instance or instance.get_channel_type() != 'whatsapp':
+        return jsonify({'status': 'not_running'})
+    return jsonify(instance.get_bridge_status())
+
+
+@agents_bp.route('/api/channels/whatsapp-bridge/<channel_id>/callback', methods=['POST'])
+def api_whatsapp_callback(channel_id):
+    """Receive incoming WhatsApp messages from the Baileys sidecar."""
+    from backend.channels.registry import channel_manager
+    import threading
+    instance = channel_manager.get_channel_instance(channel_id)
+    if not instance or instance.get_channel_type() != 'whatsapp':
+        return jsonify({'error': 'Channel not found'}), 404
+    payload = request.get_json(silent=True) or {}
+    threading.Thread(target=instance.handle_callback, args=(payload,), daemon=True).start()
+    return jsonify({'ok': True})
 
 
 # ==================== Compiled Prompt API ====================
@@ -925,6 +966,79 @@ def api_chat_stream(agent_id):
                     break
         finally:
             event_stream.unregister_web_listener(session_id)
+            for event_name, handler in handlers.items():
+                event_stream.off(event_name, handler)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        }
+    )
+
+
+@agents_bp.route('/api/approvals/stream', methods=['GET'])
+def api_approvals_stream():
+    """Global SSE endpoint — pushes ALL approval events (any agent, any session)
+    to every connected client. Unlike the per-session chat stream, there is no
+    session_id filtering — this is exactly the point: approval modals need to
+    appear on Dashboard, Settings, Skills, and any other page, not just /agents/:id.
+    """
+    from backend.event_stream import event_stream
+
+    q = queue.Queue(maxsize=200)
+
+    _TRANSFORMS = {
+        'approval_required': ('approval_required', lambda d: {
+            'approval_id': d.get('approval_id', ''),
+            'agent_id': d.get('agent_id', ''),
+            'source_agent_id': d.get('source_agent_id', ''),
+            'source_agent_name': d.get('source_agent_name', ''),
+            'tool': d.get('tool_name', ''),
+            'args': d.get('tool_args', {}),
+            'approval_info': d.get('approval_info', {}),
+            'reasons': d.get('reasons', []),
+            'score': d.get('score'),
+        }),
+        'approval_resolved': ('approval_resolved', lambda d: {
+            'approval_id': d.get('approval_id', ''),
+            'decision': d.get('decision', ''),
+            'timed_out': d.get('timed_out', False),
+        }),
+    }
+
+    def _make_handler(sse_event_name, transform):
+        def handler(data):
+            try:
+                payload = transform(data)
+                if payload is not None:
+                    payload['seq'] = data.get('_seq')
+                    q.put_nowait((sse_event_name, payload, data.get('_seq')))
+            except queue.Full:
+                pass
+        return handler
+
+    handlers = {}
+    for event_name, (sse_name, transform) in _TRANSFORMS.items():
+        h = _make_handler(sse_name, transform)
+        handlers[event_name] = h
+        event_stream.on(event_name, h)
+
+    def generate():
+        try:
+            while True:
+                try:
+                    item = q.get(timeout=30)
+                except queue.Empty:
+                    yield ": heartbeat\n\n"
+                    continue
+                sse_event, payload, seq = item
+                id_line = f"id: {seq}\n" if seq is not None else ''
+                yield f"{id_line}event: {sse_event}\ndata: {json.dumps(payload)}\n\n"
+        finally:
             for event_name, handler in handlers.items():
                 event_stream.off(event_name, handler)
 

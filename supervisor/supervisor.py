@@ -102,21 +102,77 @@ def is_windows() -> bool:
 
 
 def get_current_release(app_root: str) -> Optional[str]:
-    """Return the tag name of the currently active release, or None."""
+    """Return the tag name of the currently active release, or None.
+
+    Resolution order:
+    1. ``current`` symlink (Unix) / ``current.slot`` (Windows) — production
+       mode.  The target release directory must exist *and* its ``VERSION``
+       file must match the app root ``VERSION`` for the symlink to be
+       considered authoritative.
+    2. ``VERSION`` file at the app root — fallback for flat-repo /
+       development mode or when the symlink is stale.  The value is
+       normalised to match the git tag format (``v`` prefix added if
+       missing).
+
+    If the symlink is stale (points to a release that no longer exists or
+    whose version differs from the running code), a warning is logged and
+    the VERSION file is used instead.
+    """
+    version_from_file: Optional[str] = None
+    version_file = os.path.join(app_root, 'VERSION')
+    if os.path.exists(version_file):
+        with open(version_file) as f:
+            ver = f.read().strip()
+        if ver:
+            version_from_file = f'v{ver}' if not ver.startswith('v') else ver
+
+    def _check_symlink_tag(tag: str, release_dir: str) -> Optional[str]:
+        """Return the tag if the symlink is authoritative, else None to
+        indicate the VERSION-file fallback should be used."""
+        if not os.path.isdir(release_dir):
+            log.warning(
+                'current points to %s but release dir %s does not exist '
+                '— falling back to VERSION file',
+                tag, release_dir,
+            )
+            return None
+        release_ver_file = os.path.join(release_dir, 'VERSION')
+        if os.path.exists(release_ver_file):
+            with open(release_ver_file) as f2:
+                rv = f2.read().strip()
+            if version_from_file and rv != version_from_file:
+                log.warning(
+                    'current symlink says %s but release VERSION=%s differs '
+                    'from app root VERSION=%s — preferring app root VERSION',
+                    tag, rv, version_from_file,
+                )
+                return None  # fall through to VERSION file
+        return tag
+
     if is_windows():
         slot_file = os.path.join(app_root, 'current.slot')
-        if not os.path.exists(slot_file):
-            return None
-        with open(slot_file) as f:
-            tag = f.read().strip()
-        return tag if tag else None
+        if os.path.exists(slot_file):
+            with open(slot_file) as f:
+                tag = f.read().strip()
+            if tag:
+                release_dir = os.path.join(app_root, 'releases', tag)
+                resolved = _check_symlink_tag(tag, release_dir)
+                if resolved is not None:
+                    return resolved
     else:
         link = os.path.join(app_root, 'current')
-        if not os.path.islink(link):
-            return None
-        target = os.readlink(link)
-        # target is like "releases/v1.2.0" or absolute path
-        return os.path.basename(target.rstrip('/'))
+        if os.path.islink(link):
+            target = os.readlink(link)
+            tag = os.path.basename(target.rstrip('/'))
+            release_dir = os.path.join(app_root, 'releases', tag)
+            resolved = _check_symlink_tag(tag, release_dir)
+            if resolved is not None:
+                return resolved
+
+    if version_from_file is not None:
+        return version_from_file
+
+    return None
 
 
 def atomic_swap(app_root: str, new_release_path: str) -> None:
@@ -305,6 +361,15 @@ def git_fetch_tags(app_root: str) -> tuple:
     return rc == 0, err
 
 
+def git_fetch_branch(app_root: str, branch: str = 'main') -> tuple:
+    """Fetch a specific branch from origin (no tags). Returns (success, stderr)."""
+    log.info(f'Fetching branch origin/{branch}')
+    rc, _, err = _git(app_root, ['fetch', 'origin', branch])
+    if rc != 0:
+        log.warning(f'git fetch origin {branch} failed: {err}')
+    return rc == 0, err
+
+
 def get_latest_tag(app_root: str) -> Optional[str]:
     """Return the newest semver tag by version sort."""
     rc, out, _ = _git(app_root, ['tag', '-l', '--sort=-version:refname'])
@@ -338,6 +403,20 @@ def create_worktree(app_root: str, tag: str) -> tuple:
     rc, _, err = _git(app_root, ['worktree', 'add', release_path, tag])
     if rc != 0:
         log.error(f'git worktree add failed: {err}')
+    return rc == 0, err
+
+
+def create_nightly_worktree(app_root: str, branch: str = 'main') -> tuple:
+    """Create a git worktree from origin/{branch}. Reuses/overwrites
+    the releases/nightly directory each time. Returns (success, stderr)."""
+    release_path = os.path.join(app_root, 'releases', 'nightly')
+    if os.path.exists(release_path):
+        log.info(f'Removing existing nightly worktree at {release_path}')
+        remove_worktree(app_root, 'nightly')
+    os.makedirs(os.path.join(app_root, 'releases'), exist_ok=True)
+    rc, _, err = _git(app_root, ['worktree', 'add', release_path, f'origin/{branch}'])
+    if rc != 0:
+        log.error(f'git worktree add nightly failed: {err}')
     return rc == 0, err
 
 
@@ -714,46 +793,73 @@ def _notify(notifier: Optional[TelegramNotifier], step: int, description: str) -
 
 
 def run_update(tag: str, cfg: dict, notifier: Optional[TelegramNotifier],
-               skip_verify: bool = False) -> bool:
+               skip_verify: bool = False, nightly: bool = False) -> bool:
     """
     Execute the 6-step update lifecycle for the given tag.
+
+    When ``nightly=True``, ``tag`` is the branch name (e.g. "main") and the
+    release is staged at ``releases/nightly`` from ``origin/{branch}``.
+
     Returns True on success, False on failure (rollback attempted automatically).
     """
     app_root = cfg['app_root']
-    release_path = os.path.join(app_root, 'releases', tag)
+
+    if nightly:
+        release_path = os.path.join(app_root, 'releases', 'nightly')
+        display_tag = f'nightly (origin/{tag})'
+        cleanup_tag = 'nightly'
+    else:
+        release_path = os.path.join(app_root, 'releases', tag)
+        display_tag = tag
+        cleanup_tag = tag
+
     current_tag = get_current_release(app_root)
 
     if notifier:
-        notifier.begin(current_tag or '?', tag)
+        notifier.begin(current_tag or '?', display_tag)
 
     step = 0
     try:
-        # Step 1: Fetch (already done in poll loop; log it)
+        # Step 1: Fetch (already done in poll loop or by caller; log it)
         step = 1
-        _notify(notifier, step, f'Fetched — new tag: {tag}')
+        if nightly:
+            _notify(notifier, step, f'Fetched — nightly from origin/{tag}')
+        else:
+            _notify(notifier, step, f'Fetched — new tag: {tag}')
 
         # Step 2: Verify signature
         step = 2
-        # TODO: Re-enable signature verification for production
-        # Currently disabled for development convenience
-        _notify(notifier, step, 'Skipping signature verification (dev mode)')
-        if False:  # was: if not skip_verify:
-            ok, out = verify_tag(app_root, tag)
-            if not ok:
-                raise UpdateError(f'Signature verification failed: {out}')
+        if nightly:
+            _notify(notifier, step, 'Skipping signature verification (nightly)')
+            log.warning('Signature verification SKIPPED (nightly)')
         else:
-            log.warning('Signature verification SKIPPED (dev mode)')
+            # TODO: Re-enable signature verification for production
+            # Currently disabled for development convenience
+            _notify(notifier, step, 'Skipping signature verification (dev mode)')
+            if False:  # was: if not skip_verify:
+                ok, out = verify_tag(app_root, tag)
+                if not ok:
+                    raise UpdateError(f'Signature verification failed: {out}')
+            else:
+                log.warning('Signature verification SKIPPED (dev mode)')
 
         # Step 3: Stage (worktree + venv + shared links)
         step = 3
         _notify(notifier, step, 'Creating worktree & installing dependencies')
-        ok, err = create_worktree(app_root, tag)
+        if nightly:
+            ok, err = create_nightly_worktree(app_root, tag)
+        else:
+            ok, err = create_worktree(app_root, tag)
         if not ok:
             raise UpdateError(f'git worktree add failed: {err}')
 
         # Write VERSION file
         with open(os.path.join(release_path, 'VERSION'), 'w') as f:
-            f.write(tag)
+            if nightly:
+                rc, sha, _ = _git(app_root, ['rev-parse', '--short', f'origin/{tag}'])
+                f.write(f'nightly-{sha}' if rc == 0 else 'nightly')
+            else:
+                f.write(tag)
 
         ok, err = create_venv_and_install(
             release_path, cfg['python_bin'], cfg.get('uv_bin'))
@@ -800,19 +906,19 @@ def run_update(tag: str, cfg: dict, notifier: Optional[TelegramNotifier],
                 raise UpdateError('Health check failed during monitoring period')
 
         if notifier:
-            notifier.send_success(tag)
-        log.info(f'Update to {tag} successful')
+            notifier.send_success(display_tag)
+        log.info(f'Update to {display_tag} successful')
         return True
 
     except UpdateError as e:
-        log.error(f'Update to {tag} failed at step {step}/{TOTAL_STEPS}: {e}')
+        log.error(f'Update to {display_tag} failed at step {step}/{TOTAL_STEPS}: {e}')
         if notifier:
             notifier.send_failure(step, TOTAL_STEPS, str(e))
         # Rollback
         rollback(app_root, cfg, notifier)
         # Clean up bad release worktree
         if os.path.exists(release_path):
-            remove_worktree(app_root, tag)
+            remove_worktree(app_root, cleanup_tag)
         return False
     except Exception as e:
         log.error(f'Unexpected error at step {step}: {e}', exc_info=True)
@@ -820,7 +926,7 @@ def run_update(tag: str, cfg: dict, notifier: Optional[TelegramNotifier],
             notifier.send_failure(step, TOTAL_STEPS, f'Unexpected error: {e}')
         rollback(app_root, cfg, notifier)
         if os.path.exists(release_path):
-            remove_worktree(app_root, tag)
+            remove_worktree(app_root, cleanup_tag)
         return False
 
 # ---------------------------------------------------------------------------
