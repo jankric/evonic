@@ -285,9 +285,10 @@ class TelegramChannel(BaseChannel):
         def _on_approval_required(data):
             if data.get('channel_id') != channel_id:
                 return
-            user_id = data.get('external_user_id')
-            if not user_id:
+            ext_user_id = data.get('external_user_id')
+            if not ext_user_id:
                 return
+            chat_id_str, thread_id = _parse_forum_user_id(ext_user_id)
             approval_id = data.get('approval_id', '')
             tool_name = data.get('tool_name', '')
             info = data.get('approval_info', {})
@@ -315,13 +316,14 @@ class TelegramChannel(BaseChannel):
                 InlineKeyboardButton("Approve", callback_data=f"approve:{approval_id}"),
                 InlineKeyboardButton("Reject", callback_data=f"reject:{approval_id}"),
             ]])
+            send_kwargs = {"chat_id": int(chat_id_str), "text": text, "reply_markup": keyboard}
+            if thread_id:
+                send_kwargs["message_thread_id"] = thread_id
             try:
                 sent_msg = self._run_async(
-                    self._app.bot.send_message(
-                        chat_id=int(user_id), text=text, reply_markup=keyboard
-                    )
+                    self._app.bot.send_message(**send_kwargs)
                 )
-                _pending_approval_msgs[approval_id] = (int(user_id), sent_msg.message_id)
+                _pending_approval_msgs[approval_id] = (int(chat_id_str), sent_msg.message_id)
             except Exception as e:
                 _logger.error("Failed to send approval prompt: %s", e)
 
@@ -434,9 +436,13 @@ class TelegramChannel(BaseChannel):
     def _do_send(self, external_user_id: str, text: str):
         if not self._app:
             return
+        chat_id, thread_id = _parse_forum_user_id(external_user_id)
         text = _strip_markdown(text)
         for chunk in _split_message(text):
-            self._run_async(self._app.bot.send_message(chat_id=external_user_id, text=chunk))
+            kwargs = {"chat_id": chat_id, "text": chunk}
+            if thread_id:
+                kwargs["message_thread_id"] = thread_id
+            self._run_async(self._app.bot.send_message(**kwargs))
         from backend.event_stream import event_stream
         event_stream.emit('message_sent', {
             'channel_type': 'telegram',
@@ -448,4 +454,8 @@ class TelegramChannel(BaseChannel):
     def send_typing(self, external_user_id: str):
         if not self._app:
             return
-        self._run_async(self._app.bot.send_chat_action(chat_id=external_user_id, action='typing'))
+        chat_id, thread_id = _parse_forum_user_id(external_user_id)
+        kwargs = {"chat_id": chat_id, "action": "typing"}
+        if thread_id:
+            kwargs["message_thread_id"] = thread_id
+        self._run_async(self._app.bot.send_chat_action(**kwargs))
