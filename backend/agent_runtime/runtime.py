@@ -898,8 +898,15 @@ class AgentRuntime:
             return {"response": None, "buffered": True, "tool_trace": [], "timeline": []}
 
         # No buffering — queue immediately and wait for result
+        # For inter-agent or notifier-triggered messages, send via channel automatically
+        # since there is no Telegram handler waiting to deliver the response.
+        _is_agent_triggered = (
+            (external_user_id or '').startswith('__agent__') or
+            (metadata or {}).get('agent_message') or
+            (metadata or {}).get('agent_reply')
+        )
         task = _QueueTask(agent, SessionContext(session_id, external_user_id, channel_id),
-                          send_via_channel=False)
+                          send_via_channel=bool(channel_id and _is_agent_triggered))
         self._message_queue.put(task)
         task.event.wait()
         return task.result

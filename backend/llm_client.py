@@ -301,6 +301,12 @@ class LLMClient:
                     thinking_injected = True
             processed_messages.append(new_msg)
 
+        # Ensure a system message is always present as the first message.
+        # Some upstream providers (e.g. cb-upstream for claude-opus) reject
+        # requests that lack a system message with error 11101.
+        if not processed_messages or processed_messages[0].get('role') != 'system':
+            processed_messages.insert(0, {"role": "system", "content": "You are a helpful assistant."})
+
         # Merge multiple leading system messages into one to satisfy strict chat
         # templates (e.g. Llama 3.x) that only allow a single system message.
         n_sys = 0
