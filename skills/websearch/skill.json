@@ -1,0 +1,25 @@
+{
+  "id": "websearch",
+  "name": "Web Search (Exa)",
+  "version": "1.0.0",
+  "description": "Web search, content extraction, and similar page discovery powered by Exa AI. Provides real-time internet access for agents.",
+  "author": "Evonic",
+  "tools_file": "tools.json",
+  "lazy_tools": true,
+  "variables": [
+    {
+      "name": "exa_api_key",
+      "label": "Exa API Key",
+      "type": "string",
+      "default": "",
+      "description": "Your Exa AI API key. Get one at https://exa.ai"
+    },
+    {
+      "name": "max_results",
+      "label": "Default Max Results",
+      "type": "number",
+      "default": 10,
+      "description": "Default number of search results to return (1-50)."
+    }
+  ]
+}
