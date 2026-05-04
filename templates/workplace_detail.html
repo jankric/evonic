@@ -13,7 +13,10 @@
             <p class="text-sm text-gray-500 mt-0.5" id="workplace-subtitle">Loading...</p>
         </div>
         <span id="workplace-type-badge" class="text-xs font-medium px-3 py-1 rounded-full bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">{{ workplace.type }}</span>
-        <div id="workplace-status-dot" class="w-3 h-3 rounded-full bg-gray-400"></div>
+        <div id="workplace-status-indicator" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-700">
+            <div id="workplace-status-dot" class="w-2.5 h-2.5 rounded-full bg-gray-400"></div>
+            <span id="workplace-status-text" class="text-xs font-medium text-gray-500 dark:text-gray-400 capitalize">loading</span>
+        </div>
     </div>
 
     <!-- Tabs -->
@@ -135,13 +138,20 @@
             </p>
         </div>
 
-        <!-- Connection actions (remote) -->
+        <!-- Connection actions (local + remote) -->
         <div id="connection-actions" class="hidden bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 mt-4">
             <h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">Connection</h3>
-            <div class="flex gap-3">
-                <button id="btn-connect" onclick="connectWorkplace()" class="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-md text-sm font-medium transition-colors">Connect</button>
-                <button id="btn-disconnect" onclick="disconnectWorkplace()" class="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-md text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">Disconnect</button>
+            <div class="flex items-center gap-3">
+                <button id="btn-connect" onclick="connectWorkplace()" class="inline-flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md text-sm font-medium transition-colors">
+                    <svg id="btn-connect-spinner" class="hidden animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <span id="btn-connect-label">Connect</span>
+                </button>
+                <button id="btn-disconnect" onclick="disconnectWorkplace()" class="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-md text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                    <svg id="btn-disconnect-spinner" class="hidden animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    <span id="btn-disconnect-label">Disconnect</span>
+                </button>
             </div>
+            <p id="connection-status-msg" class="hidden text-xs mt-3 text-gray-500 dark:text-gray-400"></p>
         </div>
 
         <!-- Danger zone -->
@@ -199,6 +209,60 @@ const STATUS_DOT_CLS = {
     error:        'bg-red-500',
 };
 
+const STATUS_INDICATOR_CLS = {
+    connected:    'bg-green-50 dark:bg-green-900/20',
+    disconnected: 'bg-gray-100 dark:bg-gray-700',
+    connecting:   'bg-yellow-50 dark:bg-yellow-900/20',
+    error:        'bg-red-50 dark:bg-red-900/20',
+};
+const STATUS_TEXT_CLS = {
+    connected:    'text-green-700 dark:text-green-400',
+    disconnected: 'text-gray-500 dark:text-gray-400',
+    connecting:   'text-yellow-700 dark:text-yellow-400',
+    error:        'text-red-600 dark:text-red-400',
+};
+const STATUS_LABELS = {
+    connected:    'Connected',
+    disconnected: 'Disconnected',
+    connecting:   'Connecting...',
+    error:        'Error',
+};
+
+function updateStatusBadge(status) {
+    const dotCls = STATUS_DOT_CLS[status] || 'bg-gray-400';
+    const indicatorCls = STATUS_INDICATOR_CLS[status] || 'bg-gray-100 dark:bg-gray-700';
+    const textCls = STATUS_TEXT_CLS[status] || 'text-gray-500 dark:text-gray-400';
+    const label = STATUS_LABELS[status] || status || 'Unknown';
+
+    $('#workplace-status-dot').attr('class', 'w-2.5 h-2.5 rounded-full ' + dotCls + (status === 'connecting' ? ' animate-pulse' : ''));
+    $('#workplace-status-indicator').attr('class', 'flex items-center gap-2 px-3 py-1.5 rounded-full ' + indicatorCls);
+    $('#workplace-status-text').attr('class', 'text-xs font-medium capitalize ' + textCls).text(label);
+}
+
+function updateConnectionButtons(status) {
+    const isConnected = status === 'connected';
+    const isConnecting = status === 'connecting';
+
+    // Reset loading states
+    $('#btn-connect').prop('disabled', false);
+    $('#btn-disconnect').prop('disabled', false);
+    $('#btn-connect-spinner').addClass('hidden');
+    $('#btn-disconnect-spinner').addClass('hidden');
+    $('#btn-connect-label').text('Connect');
+    $('#btn-disconnect-label').text('Disconnect');
+
+    // Show/hide based on status
+    $('#btn-connect').toggleClass('hidden', isConnected || isConnecting);
+    $('#btn-disconnect').toggleClass('hidden', !isConnected && !isConnecting);
+
+    // If connecting, show loading on disconnect button (since user initiated connect)
+    if (isConnecting) {
+        $('#btn-disconnect').prop('disabled', true);
+        $('#btn-disconnect-label').text('Connecting...');
+        $('#btn-disconnect-spinner').removeClass('hidden');
+    }
+}
+
 function showTab(name) {
     ['config', 'agents', 'status'].forEach(t => {
         $('#panel-' + t).toggleClass('hidden', t !== name);
@@ -231,8 +295,8 @@ function applyWorkplaceData(h) {
     badge.attr('class', 'text-xs font-medium px-3 py-1 rounded-full ' + (TYPE_COLORS[type] || 'bg-gray-100 text-gray-600'));
     badge.text(TYPE_LABELS[type] || type);
 
-    const dotCls = STATUS_DOT_CLS[h.status] || 'bg-gray-400';
-    $('#workplace-status-dot').attr('class', 'w-3 h-3 rounded-full ' + dotCls);
+    // Update status dot + text badge
+    updateStatusBadge(h.status);
 
     // Config form
     $('#edit-name').val(h.name);
@@ -240,6 +304,7 @@ function applyWorkplaceData(h) {
     if (type === 'local') {
         $('#config-local').removeClass('hidden');
         $('#cfg-local-path').val(cfg.workspace_path || '');
+        $('#connection-actions').removeClass('hidden');
     } else if (type === 'remote') {
         $('#config-remote').removeClass('hidden');
         $('#cfg-remote-host').val(cfg.host || '');
@@ -259,9 +324,7 @@ function applyWorkplaceData(h) {
         loadBinaryPlatforms();
     }
     // Toggle connect/disconnect buttons based on status
-    const isConnected = h.status === 'connected';
-    $('#btn-connect').toggleClass('hidden', isConnected);
-    $('#btn-disconnect').toggleClass('hidden', !isConnected);
+    updateConnectionButtons(h.status);
 }
 
 function applyConnectorData(connector, homeStatus) {
@@ -511,32 +574,78 @@ function loadAgents() {
 function refreshStatus() {
     $.get('/api/workplaces/' + HOME_ID + '/status', function(data) {
         $('#status-json').text(JSON.stringify(data, null, 2));
-        const dotCls = STATUS_DOT_CLS[data.status] || 'bg-gray-400';
-        $('#workplace-status-dot').attr('class', 'w-3 h-3 rounded-full ' + dotCls);
-        const isConnected = data.status === 'connected';
-        $('#btn-connect').toggleClass('hidden', isConnected);
-        $('#btn-disconnect').toggleClass('hidden', !isConnected);
+        updateStatusBadge(data.status);
+        updateConnectionButtons(data.status);
     });
 }
 
+function setConnectionLoading(action) {
+    const isConnect = action === 'connect';
+    const btn = isConnect ? '#btn-connect' : '#btn-disconnect';
+    const spinner = isConnect ? '#btn-connect-spinner' : '#btn-disconnect-spinner';
+    const label = isConnect ? '#btn-connect-label' : '#btn-disconnect-label';
+    const msg = $('#connection-status-msg');
+
+    $(btn).prop('disabled', true);
+    $(spinner).removeClass('hidden');
+    $(label).text(isConnect ? 'Connecting...' : 'Disconnecting...');
+
+    // Also disable the other button
+    const otherBtn = isConnect ? '#btn-disconnect' : '#btn-connect';
+    $(otherBtn).prop('disabled', true);
+
+    // Show status message
+    msg.removeClass('hidden').text(isConnect ? 'Establishing connection...' : 'Closing connection...');
+
+    // Update header badge to connecting state
+    if (isConnect) updateStatusBadge('connecting');
+}
+
+function clearConnectionLoading() {
+    $('#btn-connect, #btn-disconnect').prop('disabled', false);
+    $('#btn-connect-spinner, #btn-disconnect-spinner').addClass('hidden');
+    $('#btn-connect-label').text('Connect');
+    $('#btn-disconnect-label').text('Disconnect');
+    $('#connection-status-msg').addClass('hidden');
+}
+
 function connectWorkplace() {
+    setConnectionLoading('connect');
     $.ajax({
         url: '/api/workplaces/' + HOME_ID + '/connect',
         method: 'POST',
         success: function(r) {
-            showToast(r.ok ? 'Connected' : (r.error || 'Failed'), r.ok ? 'success' : 'error');
-            setTimeout(loadWorkplace, 500);
+            clearConnectionLoading();
+            if (r.ok) {
+                showToast('Connected', 'success');
+            } else {
+                showToast(r.error || 'Connection failed', 'error');
+            }
+            loadWorkplace();
         },
-        error: function(xhr) { showToast((xhr.responseJSON && xhr.responseJSON.error) || 'Error', 'error'); }
+        error: function(xhr) {
+            clearConnectionLoading();
+            showToast((xhr.responseJSON && xhr.responseJSON.error) || 'Connection error', 'error');
+            loadWorkplace();
+        }
     });
 }
 
 function disconnectWorkplace() {
+    setConnectionLoading('disconnect');
     $.ajax({
         url: '/api/workplaces/' + HOME_ID + '/disconnect',
         method: 'POST',
-        success: function() { showToast('Disconnected', 'success'); setTimeout(loadWorkplace, 500); },
-        error: function() { showToast('Error disconnecting', 'error'); }
+        success: function() {
+            clearConnectionLoading();
+            showToast('Disconnected', 'success');
+            loadWorkplace();
+        },
+        error: function(xhr) {
+            clearConnectionLoading();
+            showToast((xhr.responseJSON && xhr.responseJSON.error) || 'Disconnect error', 'error');
+            loadWorkplace();
+        }
     });
 }
 
@@ -558,9 +667,7 @@ function deleteWorkplace() {
 
 $(document).ready(function() {
     loadWorkplace();
-    // Poll status every 5s
-    setInterval(refreshStatus, 5000);
-    // SSE for realtime connector events
+    // SSE for realtime status updates (no polling needed)
     startWorkplaceEventStream();
 });
 
