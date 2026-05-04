@@ -177,15 +177,20 @@ def _register_builtins():
         args: str,
     ) -> str:
         from models.db import db
-        from backend.agent_runtime import AgentRuntime
+        from backend.agent_runtime import agent_runtime  # global singleton
+        from backend.agent_runtime import summarizer
 
-        rt = AgentRuntime()
         agent = db.get_agent(agent_id)
         if not agent:
             return "Error: Agent not found."
 
-        # Trigger summarization for this session
-        rt._maybe_summarize(agent, session_id)
+        # Trigger summarization for this session using the singleton's concurrency primitives
+        summarizer.maybe_summarize(
+            agent, session_id,
+            agent_runtime._llm_serializer._summarize_guard,
+            agent_runtime._llm_serializer._summarize_active,
+            agent_runtime._llm_serializer._llm_lock,
+        )
         return "Session summary has been regenerated."
 
     command_registry.register(
