@@ -119,6 +119,30 @@ def execute(agent, args: dict) -> dict:
         if ssh_check["blocked"]:
             return ssh_check["error"]
 
+    # Heuristic safety check: require approval for SQLite database access
+    if not (agent or {}).get('is_super') and (agent is None or agent.get("safety_checker_enabled", 1)):
+        from backend.tools.safety_checker import check_sqlite_path
+        db_check = check_sqlite_path(file_path, agent)
+        if db_check["blocked"]:
+            return {
+                "error": db_check["error"],
+                "level": "requires_approval",
+                "reasons": [db_check["reason"]],
+                "approval_info": {
+                    "risk_level": "medium",
+                    "description": "Accessing SQLite database files may expose sensitive data.",
+                },
+            }
+
+    # /_self/ path: always route to the agent's local directory on the evonic server.
+    from backend.tools._workspace import is_self_path, resolve_self_path
+    agent_id = (agent or {}).get('id')
+    if agent_id and is_self_path(file_path):
+        local_path = resolve_self_path(agent_id, file_path)
+        if not local_path:
+            return "Error: Access denied — path escapes agent directory."
+        return read_file(local_path, offset=offset)
+
     # When sandbox is enabled, route file I/O through the execution backend.
     sandbox_enabled = (agent or {}).get('sandbox_enabled', 1)
     if sandbox_enabled:

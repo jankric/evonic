@@ -97,6 +97,21 @@ def execute(agent, args: dict) -> dict:
         if ssh_check["blocked"]:
             return {"error": ssh_check["error"]}
 
+    # Heuristic safety check: require approval for SQLite database access
+    if not (agent or {}).get('is_super') and (agent is None or agent.get("safety_checker_enabled", 1)):
+        from backend.tools.safety_checker import check_sqlite_path
+        db_check = check_sqlite_path(file_path, agent)
+        if db_check["blocked"]:
+            return {
+                "error": db_check["error"],
+                "level": "requires_approval",
+                "reasons": [db_check["reason"]],
+                "approval_info": {
+                    "risk_level": "medium",
+                    "description": "Writing to SQLite database files may corrupt or expose sensitive data.",
+                },
+            }
+
     # Normalize booleans in case they arrive as strings from the LLM
     if isinstance(overwrite, str):
         overwrite = overwrite.lower() not in ('false', '0', 'no')
@@ -107,6 +122,15 @@ def execute(agent, args: dict) -> dict:
         return {'error': "Missing required argument: 'file_path'"}
     if content is None:
         return {'error': "Missing required argument: 'content'"}
+
+    # /_self/ path: always route to the agent's local directory on the evonic server.
+    from backend.tools._workspace import is_self_path, resolve_self_path
+    agent_id = (agent or {}).get('id')
+    if agent_id and is_self_path(file_path):
+        local_path = resolve_self_path(agent_id, file_path)
+        if not local_path:
+            return {'error': "Access denied — path escapes agent directory."}
+        return write_file(local_path, content, overwrite=overwrite, create_dirs=create_dirs)
 
     # When sandbox is enabled, route file I/O through the execution backend
     # (Docker container, SSH remote, etc.) instead of the host filesystem.

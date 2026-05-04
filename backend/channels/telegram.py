@@ -157,6 +157,71 @@ class TelegramChannel(BaseChannel):
                 text = strip_system_tags(update.message.text or update.message.caption or '')
                 image_url = None
 
+                # Allowlist check with pairing-code auto-approve (mirrors WhatsApp pattern)
+                from_user = update.message.from_user
+                user_name = None
+                if from_user:
+                    parts = [p for p in [from_user.first_name, from_user.last_name] if p]
+                    user_name = ' '.join(parts) if parts else from_user.username
+                from models.db import db
+
+                # Step 1: Fully approved user? (in allowlist AND has name set)
+                if db.is_user_allowed(self.channel_id, user_id):
+                    if db.needs_name(self.channel_id, user_id):
+                        name_candidate = text.strip() if text else ''
+                        if name_candidate and len(name_candidate) <= 100:
+                            db.set_user_display_name(self.channel_id, user_id, name_candidate)
+                            await update.message.reply_text(
+                                f"Thanks, {name_candidate}! You're all set. How can I help you today?"
+                            )
+                        elif text:
+                            await update.message.reply_text(
+                                "That name is too long. Please share a shorter name (max 100 characters)."
+                            )
+                        else:
+                            await update.message.reply_text(
+                                "Please tell me your name to continue (e.g. 'My name is Budi')."
+                            )
+                        return
+                    # User is fully approved — fall through to normal processing
+                else:
+                    # Step 2: User NOT in allowlist — try pairing-code auto-approve
+                    from backend.channels.pairing import extract_pair_code, format_pair_code as fmt_code
+                    raw_code = extract_pair_code(text) if text else None
+                    if raw_code:
+                        pending = db.get_pending_approval_by_code(raw_code)
+                        if pending:
+                            if not pending.get('external_user_id'):
+                                db.update_pending_user_id(pending['id'], user_id)
+                            approved_user = db.approve_pending_with_name_needed(pending['id'])
+                            if approved_user:
+                                await update.message.reply_text(
+                                    "✅ You're now approved! Welcome aboard.\n\n"
+                                    "Before we chat, please tell me your name (e.g. 'My name is Budi')."
+                                )
+                            return
+                        else:
+                            await update.message.reply_text(
+                                "❌ That pairing code is invalid or has expired. "
+                                "Please ask the administrator for a new one."
+                            )
+                            return
+                    else:
+                        # No pairing code in message — check if pending approval already exists
+                        existing = db.get_pending_approvals(self.channel_id)
+                        already_pending = any(
+                            p.get('external_user_id') == user_id for p in existing
+                        )
+                        if not already_pending:
+                            allowed, pair_code = self._check_allowlist(user_id, user_name)
+                            if not allowed and pair_code:
+                                formatted = fmt_code(pair_code)
+                                await update.message.reply_text(
+                                    "👋 You're not yet approved to chat here. "
+                                    "Please ask the administrator for a pairing code, then send it in this chat."
+                                )
+                        return
+
                 # Handle photo/image messages if agent has vision enabled
                 IMAGE_MIMES = {'image/jpeg', 'image/png', 'image/webp'}
                 has_photo = update.message.photo
@@ -258,6 +323,25 @@ class TelegramChannel(BaseChannel):
                     pass
 
         self._app = ApplicationBuilder().token(bot_token).build()
+
+        async def handle_error(update: object, context) -> None:
+            from telegram.error import Conflict
+            if isinstance(context.error, Conflict):
+                _logger.warning(
+                    "Telegram channel %s: bot token conflict — another bot instance is already "
+                    "running with this token. Stopping polling. "
+                    "Make sure only one instance uses this bot token.",
+                    channel_id,
+                )
+                self._running = False
+                # Stop polling asynchronously so we don't deadlock
+                import asyncio
+                asyncio.ensure_future(self._app.updater.stop())
+            else:
+                _logger.error("Telegram error: %s", context.error, exc_info=context.error)
+
+        self._app.add_error_handler(handle_error)
+
         # Handle text, photos, and image documents (PNG, WebP)
         # Note: we intentionally do NOT exclude COMMAND filter so that
         # slash commands (/clear, /help, /summary) reach our backend handler.
@@ -396,9 +480,26 @@ class TelegramChannel(BaseChannel):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             self._loop = loop  # save reference so send_message/send_typing can use it
-            loop.run_until_complete(self._app.initialize())
-            loop.run_until_complete(self._app.start())
-            loop.run_until_complete(self._app.updater.start_polling())
+            try:
+                loop.run_until_complete(self._app.initialize())
+                loop.run_until_complete(self._app.start())
+                loop.run_until_complete(self._app.updater.start_polling())
+            except Exception as exc:
+                # Check for Telegram Conflict error (another instance using the same token)
+                exc_type = type(exc).__name__
+                exc_module = type(exc).__module__
+                if 'Conflict' in exc_type or (exc_module.startswith('telegram') and 'conflict' in str(exc).lower()):
+                    _logger.warning(
+                        "Telegram channel %s: bot token conflict — another bot instance is already "
+                        "running with this token. Polling will not start. "
+                        "Make sure only one instance uses this bot token.",
+                        channel_id,
+                    )
+                else:
+                    _logger.error("Telegram channel %s: failed to start polling: %s", channel_id, exc, exc_info=True)
+                self._running = False
+                loop.close()
+                return
             self._running = True
             loop.run_forever()
 

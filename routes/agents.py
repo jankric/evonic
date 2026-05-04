@@ -7,12 +7,28 @@ import re
 import json
 import uuid
 import queue
+from typing import Dict, Any, List
 from flask import Blueprint, render_template, jsonify, request, Response, stream_with_context
 from models.db import db
 from models.chatlog import chatlog_manager, _DISPLAY_TYPES
 from backend.tools import tool_registry
 
 agents_bp = Blueprint('agents', __name__)
+
+_SENSITIVE_AGENT_KEYS = frozenset({'workspace'})
+
+
+def _sanitize_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip sensitive fields (workspace) from an agent dict before API response."""
+    for key in _SENSITIVE_AGENT_KEYS:
+        agent.pop(key, None)
+    return agent
+
+
+def _sanitize_agents(agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for a in agents:
+        _sanitize_agent(a)
+    return agents
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AGENTS_DIR = os.path.join(BASE_DIR, 'agents')
@@ -95,7 +111,7 @@ def agent_detail(agent_id):
 @agents_bp.route('/api/agents', methods=['GET'])
 def api_list_agents():
     agents = db.get_agents()
-    return jsonify({'agents': agents})
+    return jsonify({'agents': _sanitize_agents(agents)})
 
 
 @agents_bp.route('/api/agents/<agent_id>', methods=['GET'])
@@ -113,7 +129,7 @@ def api_get_agent(agent_id):
         if td.get('id'):
             known_ids.add(td['id'])
     agent['missing_tools'] = [t for t in agent['tools'] if t not in known_ids]
-    return jsonify(agent)
+    return jsonify(_sanitize_agent(agent))
 
 
 @agents_bp.route('/api/agents', methods=['POST'])
@@ -142,7 +158,7 @@ def api_create_agent():
         _write_system_prompt(agent_id, data.get('system_prompt', ''))
         agent = db.get_agent(agent_id)
         agent['system_prompt'] = _read_system_prompt(agent_id, fallback=agent.get('system_prompt', ''))
-        return jsonify({'success': True, 'agent': agent})
+        return jsonify({'success': True, 'agent': _sanitize_agent(agent)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -167,7 +183,7 @@ def api_update_agent(agent_id):
     db.update_agent(agent_id, data)
     agent = db.get_agent(agent_id)
     agent['system_prompt'] = _read_system_prompt(agent_id, fallback=agent.get('system_prompt', ''))
-    return jsonify({'success': True, 'agent': agent})
+    return jsonify({'success': True, 'agent': _sanitize_agent(agent)})
 
 
 @agents_bp.route('/api/agents/<agent_id>', methods=['DELETE'])
@@ -467,6 +483,19 @@ def api_update_channel(agent_id, channel_id):
         db.update_channel(channel_id, data)
     except ValueError as e:
         return jsonify({'error': str(e)}), 409
+
+    # Sync running state with enabled flag if it was changed
+    if 'enabled' in data:
+        from backend.channels.registry import channel_manager
+        if data['enabled']:
+            try:
+                channel_manager.start_channel(channel_id)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error("Failed to start channel %s: %s", channel_id, e)
+        else:
+            channel_manager.stop_channel(channel_id)
+
     return jsonify({'success': True, 'channel': db.get_channel(channel_id)})
 
 
@@ -482,6 +511,7 @@ def api_delete_channel(agent_id, channel_id):
 @agents_bp.route('/api/agents/<agent_id>/channels/<channel_id>/start', methods=['POST'])
 def api_start_channel(agent_id, channel_id):
     from backend.channels.registry import channel_manager
+    db.update_channel(channel_id, {'enabled': True})
     try:
         channel_manager.start_channel(channel_id)
         return jsonify({'success': True, 'running': True})
@@ -492,6 +522,7 @@ def api_start_channel(agent_id, channel_id):
 @agents_bp.route('/api/agents/<agent_id>/channels/<channel_id>/stop', methods=['POST'])
 def api_stop_channel(agent_id, channel_id):
     from backend.channels.registry import channel_manager
+    db.update_channel(channel_id, {'enabled': False})
     channel_manager.stop_channel(channel_id)
     return jsonify({'success': True, 'running': False})
 
@@ -516,6 +547,84 @@ def api_unset_primary_channel(agent_id, channel_id):
         return jsonify({'error': 'This channel is not the primary channel'}), 400
     db.unset_primary_channel(agent_id)
     return jsonify({'success': True})
+
+
+# ==================== Pending Approvals API ====================
+
+
+@agents_bp.route('/api/agents/<agent_id>/channels/<channel_id>/pending-approvals', methods=['GET'])
+def api_list_pending_approvals(agent_id, channel_id):
+    """Return non-expired pending approvals for a channel."""
+    if not db.get_agent(agent_id):
+        return jsonify({'error': 'Agent not found'}), 404
+    channel = db.get_channel(channel_id)
+    if not channel or channel['agent_id'] != agent_id:
+        return jsonify({'error': 'Channel not found for this agent'}), 404
+    approvals = db.get_pending_approvals(channel_id)
+    return jsonify({'pending_approvals': approvals})
+
+
+@agents_bp.route('/api/agents/<agent_id>/channels/<channel_id>/pending-approvals/<pending_id>/approve', methods=['POST'])
+def api_approve_pending(agent_id, channel_id, pending_id):
+    """Approve a pending approval: add user to allowed_users and remove the pending record."""
+    if not db.get_agent(agent_id):
+        return jsonify({'error': 'Agent not found'}), 404
+    channel = db.get_channel(channel_id)
+    if not channel or channel['agent_id'] != agent_id:
+        return jsonify({'error': 'Channel not found for this agent'}), 404
+    success = db.approve_pending(pending_id)
+    if not success:
+        return jsonify({'error': 'Pending approval not found or already processed'}), 404
+    return jsonify({'success': True})
+
+
+@agents_bp.route('/api/agents/<agent_id>/channels/<channel_id>/pending-approvals/<pending_id>/reject', methods=['POST'])
+def api_reject_pending(agent_id, channel_id, pending_id):
+    """Reject a pending approval: remove the pending record."""
+    if not db.get_agent(agent_id):
+        return jsonify({'error': 'Agent not found'}), 404
+    channel = db.get_channel(channel_id)
+    if not channel or channel['agent_id'] != agent_id:
+        return jsonify({'error': 'Channel not found for this agent'}), 404
+    success = db.reject_pending(pending_id)
+    if not success:
+        return jsonify({'error': 'Pending approval not found or already processed'}), 404
+    return jsonify({'success': True})
+
+
+@agents_bp.route('/api/agents/<agent_id>/channels/<channel_id>/generate-pair-code', methods=['POST'])
+def api_generate_pair_code(agent_id, channel_id):
+    """Generate a new pairing code for a channel (admin-initiated).
+
+    Creates a pending approval for a user_id specified in the request body,
+    or returns a standalone code that the admin can hand out.
+    """
+    if not db.get_agent(agent_id):
+        return jsonify({'error': 'Agent not found'}), 404
+    channel = db.get_channel(channel_id)
+    if not channel or channel['agent_id'] != agent_id:
+        return jsonify({'error': 'Channel not found for this agent'}), 404
+
+    from backend.channels.pairing import generate_pair_code, format_pair_code
+    from datetime import datetime, timedelta
+
+    data = request.get_json(silent=True) or {}
+    external_user_id = (data.get('user_id') or '').strip()
+
+    raw_code = generate_pair_code()
+    formatted = format_pair_code(raw_code)
+    expires_at = (datetime.utcnow() + timedelta(minutes=5)).isoformat()
+
+    pending_id = db.create_pending_approval(
+        channel_id=channel_id,
+        external_user_id=external_user_id or '',
+        user_name=data.get('user_name'),
+        pair_code=raw_code,
+        expires_at=expires_at,
+    )
+
+    return jsonify({'success': True, 'pair_code': formatted, 'raw_code': raw_code,
+                    'expires_at': expires_at, 'pending_id': pending_id})
 
 
 # ==================== WhatsApp Bridge API ====================
@@ -759,9 +868,13 @@ def api_chat_agent_state(agent_id):
 
 @agents_bp.route('/api/agents/<agent_id>/chat/clear', methods=['POST'])
 def api_chat_clear(agent_id):
+    agent = db.get_agent(agent_id)
+    if not agent:
+        return jsonify({'error': 'Agent not found'}), 404
+
     import os, datetime
     data = request.get_json()
-    user_id = data.get('user_id', 'anonymous')
+    user_id = (data.get('user_id') or '').strip() or 'anonymous'
 
     from backend.agent_runtime import agent_runtime
     agent_runtime.clear_session(agent_id, user_id)
