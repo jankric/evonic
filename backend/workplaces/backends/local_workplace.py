@@ -53,3 +53,22 @@ class LocalWorkplaceBackend(ExecutionBackend):
             'workspace': self._workspace,
             'status': 'idle',
         }
+
+    # ------------------------------------------------------------------
+    # File I/O — delegated to inner backend
+    # ------------------------------------------------------------------
+
+    def file_exists(self, path: str) -> bool:
+        return self._get_inner().file_exists(path)
+
+    def file_stat(self, path: str) -> dict:
+        return self._get_inner().file_stat(path)
+
+    def read_file(self, path: str) -> dict:
+        return self._get_inner().read_file(path)
+
+    def write_file(self, path: str, content: str, create_dirs: bool = True) -> dict:
+        return self._get_inner().write_file(path, content, create_dirs)
+
+    def make_dirs(self, path: str) -> dict:
+        return self._get_inner().make_dirs(path)
