@@ -1,0 +1,32 @@
+{
+    "id": "tavily-search",
+    "name": "Web Search (Tavily)",
+    "version": "1.0.0",
+    "description": "Real-time web search powered by Tavily AI. Optimized for AI agents — returns clean, relevant results including news, articles, and web pages. Better coverage for Indonesian and regional content.",
+    "author": "jankric",
+    "tools_file": "tools.json",
+    "lazy_tools": true,
+    "variables": [
+        {
+            "name": "api_key",
+            "label": "Tavily API Key",
+            "type": "string",
+            "default": "",
+            "description": "Tavily API key. Get one free at https://tavily.com (1000 searches/month free tier)."
+        },
+        {
+            "name": "max_results",
+            "label": "Default Max Results",
+            "type": "number",
+            "default": 5,
+            "description": "Default number of search results to return (1-10)."
+        },
+        {
+            "name": "search_depth",
+            "label": "Search Depth",
+            "type": "string",
+            "default": "basic",
+            "description": "Search depth: 'basic' (faster) or 'advanced' (more thorough, uses more credits)."
+        }
+    ]
+}

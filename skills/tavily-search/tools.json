@@ -1,0 +1,64 @@
+[
+    {
+        "type": "function",
+        "function": {
+            "name": "tavily_search",
+            "description": "Search the web using Tavily AI. Returns relevant, up-to-date results with titles, URLs, and content snippets. Great for news, current events, Indonesian content, and general research. Use this for any question that requires real-time or recent information.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query. Can be a question or keywords. E.g. 'siapa dirjen Kemen PU yang baru dilantik 2025' or 'latest AI news May 2026'."
+                    },
+                    "num_results": {
+                        "type": "integer",
+                        "description": "Number of results to return (1-10). Default: 5."
+                    },
+                    "search_depth": {
+                        "type": "string",
+                        "enum": ["basic", "advanced"],
+                        "description": "Search depth: 'basic' (faster, default) or 'advanced' (more thorough)."
+                    },
+                    "topic": {
+                        "type": "string",
+                        "enum": ["general", "news", "finance"],
+                        "description": "Search topic filter. Use 'news' for current events, 'finance' for financial data. Default: 'general'."
+                    },
+                    "time_range": {
+                        "type": "string",
+                        "enum": ["day", "week", "month", "year"],
+                        "description": "Filter results by recency. E.g. 'week' for results from the past week."
+                    },
+                    "include_answer": {
+                        "type": "boolean",
+                        "description": "Include an AI-generated answer summary. Default: false."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tavily_extract",
+            "description": "Extract clean content from one or more URLs. Use after tavily_search to get full page content, or to read any known URL. Returns clean text/markdown.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of URLs to extract content from (max 5)."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Optional query to focus extraction on relevant content."
+                    }
+                },
+                "required": ["urls"]
+            }
+        }
+    }
+]
