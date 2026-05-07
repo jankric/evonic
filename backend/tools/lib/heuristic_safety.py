@@ -25,6 +25,8 @@ import logging
 import re
 from typing import Any
 
+from backend.tools.lib.safety_base import SafetyCheckerBase, CheckResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -200,18 +202,38 @@ BASH_DANGEROUS_PATTERNS: list[dict[str, Any]] = [
 ]
 
 
-# F. SQLite Database Access Patterns (requires_approval, score 6-10)
+# F. SQLite Database Access Patterns (warning-level, score 2-3)
+# These are intentionally low-weight — basic SQLite access (SELECT, INSERT, UPDATE)
+# should NOT trigger requires_approval.  Only destructive SQL operations (DROP,
+# TRUNCATE, DELETE) in SQL_DESTRUCTIVE_PATTERNS below push the score into
+# requires_approval/dangerous territory.
 SQLITE_ACCESS_PATTERNS: list[dict[str, Any]] = [
     # SQLite command-line tool
-    {"pattern": r"\bsqlite3\b", "weight": 8, "category": "sqlite_access", "description": "SQLite3 command-line tool invocation"},
+    {"pattern": r"\bsqlite3\b", "weight": 3, "category": "sqlite_access", "description": "SQLite3 command-line tool invocation"},
     # Python SQLite imports and calls
-    {"pattern": r"\bimport\s+sqlite3\b", "weight": 8, "category": "sqlite_access", "description": "Import sqlite3 module (database access)"},
-    {"pattern": r"\bsqlite3\.connect\b", "weight": 8, "category": "sqlite_access", "description": "sqlite3.connect() call (database access)"},
-    # Specific database file references (moderate weight — combined with sqlite_access stays in requires_approval range)
-    {"pattern": r"\bchat\.db\b", "weight": 6, "category": "sqlite_db_file", "description": "Access to chat.db (project database)"},
-    # Generic database file references (lowest weight — broad match, needs another category to hit requires_approval)
-    {"pattern": r"\b\w+\.db\b", "weight": 4, "category": "sqlite_db_file", "description": "Access to .db database file"},
-    {"pattern": r"\b\w+\.sqlite3?\b", "weight": 4, "category": "sqlite_db_file", "description": "Access to .sqlite/.sqlite3 database file"},
+    {"pattern": r"\bimport\s+sqlite3\b", "weight": 3, "category": "sqlite_access", "description": "Import sqlite3 module (database access)"},
+    {"pattern": r"\bsqlite3\.connect\b", "weight": 3, "category": "sqlite_access", "description": "sqlite3.connect() call (database access)"},
+    # Specific database file references (low weight — combined with sqlite_access stays in warning range)
+    {"pattern": r"\bchat\.db\b", "weight": 3, "category": "sqlite_db_file", "description": "Access to chat.db (project database)"},
+    # Generic database file references (lowest weight — broad match, needs destructive SQL to hit requires_approval)
+    {"pattern": r"\b\w+\.db\b", "weight": 2, "category": "sqlite_db_file", "description": "Access to .db database file"},
+    {"pattern": r"\b\w+\.sqlite3?\b", "weight": 2, "category": "sqlite_db_file", "description": "Access to .sqlite/.sqlite3 database file"},
+]
+
+
+# G. SQL Destructive Patterns (requires_approval / dangerous, score 10-15)
+# These patterns detect destructive SQL operations.  When combined with
+# sqlite_access patterns above, the cumulative score triggers approval
+# or outright rejection.  Regex is case-insensitive (via _compile).
+SQL_DESTRUCTIVE_PATTERNS: list[dict[str, Any]] = [
+    # Data deletion
+    {"pattern": r"\bDROP\s+TABLE\b", "weight": 12, "category": "sql_destructive", "description": "DROP TABLE - permanently deletes a table"},
+    {"pattern": r"\bDROP\s+DATABASE\b", "weight": 15, "category": "sql_destructive", "description": "DROP DATABASE - permanently deletes entire database"},
+    {"pattern": r"\bDROP\s+INDEX\b", "weight": 10, "category": "sql_destructive", "description": "DROP INDEX - deletes a database index"},
+    {"pattern": r"\bDROP\s+VIEW\b", "weight": 10, "category": "sql_destructive", "description": "DROP VIEW - deletes a database view"},
+    {"pattern": r"\bTRUNCATE\s+(?:TABLE\s+)?", "weight": 12, "category": "sql_destructive", "description": "TRUNCATE - removes all rows from a table"},
+    {"pattern": r"\bDELETE\s+FROM\b", "weight": 10, "category": "sql_destructive", "description": "DELETE FROM - deletes rows from a table"},
+    {"pattern": r"\bALTER\s+TABLE\b.*\bDROP\b", "weight": 12, "category": "sql_destructive", "description": "ALTER TABLE ... DROP - destructive schema change"},
 ]
 
 # Pre-compiled regex patterns (module-level, avoids recompiling on each call)
@@ -221,6 +243,7 @@ _NETWORK_COMPILED = _compile(NETWORK_PATTERNS)
 _SENSITIVE_FILE_COMPILED = _compile(SENSITIVE_FILE_PATTERNS)
 _BASH_DANGEROUS_COMPILED = _compile(BASH_DANGEROUS_PATTERNS)
 _SQLITE_COMPILED = _compile(SQLITE_ACCESS_PATTERNS)
+_SQL_DESTRUCTIVE_COMPILED = _compile(SQL_DESTRUCTIVE_PATTERNS)
 
 
 # ============================================================================
@@ -246,7 +269,7 @@ def _layer1_pattern_matching(code: str, tool_type: str = 'python') -> dict:
     
     # Select pre-compiled patterns based on tool type
     if tool_type == 'bash':
-        patterns = _BASH_DANGEROUS_COMPILED + _SQLITE_COMPILED
+        patterns = _BASH_DANGEROUS_COMPILED + _SQLITE_COMPILED + _SQL_DESTRUCTIVE_COMPILED
     else:
         # Python: combine all pre-compiled pattern lists
         patterns = (
@@ -254,7 +277,8 @@ def _layer1_pattern_matching(code: str, tool_type: str = 'python') -> dict:
             _NETWORK_COMPILED +
             _SENSITIVE_FILE_COMPILED +
             _DESTRUCTIVE_COMPILED +
-            _SQLITE_COMPILED
+            _SQLITE_COMPILED +
+            _SQL_DESTRUCTIVE_COMPILED
         )
     
     for p in patterns:
@@ -553,6 +577,9 @@ def _generate_approval_info(
     if "sandbox_escape" in categories or "network_exploit" in categories:
         risk_level = "critical"
         description = "This action poses a critical security risk and may compromise the system."
+    elif "sql_destructive" in categories:
+        risk_level = "high"
+        description = "This action performs destructive SQL operations (DROP, TRUNCATE, DELETE) that may permanently destroy data."
     elif "remote_code_execution" in categories or "secure_deletion" in categories:
         risk_level = "high"
         description = "This action may cause significant damage to the system."
@@ -584,17 +611,66 @@ def _generate_approval_info(
 
 
 # ============================================================================
-# Main Entry Point
+# HeuristicSafetyChecker — class wrapper implementing SafetyCheckerBase
+# ============================================================================
+
+class HeuristicSafetyChecker(SafetyCheckerBase):
+    """Built-in (system) safety checker using hardcoded heuristic patterns.
+
+    This wraps the existing 3-layer logic (pattern matching, AST analysis,
+    semantic scoring) behind the :class:`SafetyCheckerBase` interface so it
+    can participate in the :class:`SafetyPipeline`.
+
+    The ``check()`` method returns a :class:`CheckResult` (partial score +
+    reasons).  Final level/threshold logic is handled by the pipeline.
+    """
+
+    def check(self, code: str, tool_type: str = 'python', agent_context: dict[str, Any] | None = None) -> CheckResult:
+        # Layer 1: Pattern matching
+        pattern_results = _layer1_pattern_matching(code, tool_type)
+
+        # Layer 2: AST analysis (Python only)
+        ast_results = _layer2_ast_analysis(code) if tool_type == 'python' else {}
+
+        # Aggregate score
+        score = pattern_results["total_score"] + ast_results.get("total_score", 0)
+        score = _apply_modifiers(score, pattern_results, ast_results, tool_type)
+
+        reasons: list[str] = []
+        blocked_patterns: list[str] = []
+
+        for p in pattern_results["matched_patterns"]:
+            reasons.append(p["description"])
+            blocked_patterns.append(p["category"])
+
+        for call in ast_results.get("function_calls", []):
+            reasons.append(call["description"])
+            blocked_patterns.append(call.get("category", "code_execution"))
+
+        return CheckResult(
+            score=score,
+            reasons=reasons,
+            matched_patterns=pattern_results["matched_patterns"],
+            blocked_patterns=list(set(blocked_patterns)),
+        )
+
+
+# Singleton for use by the pipeline
+heuristic_checker = HeuristicSafetyChecker()
+
+
+# ============================================================================
+# Main Entry Point (backward-compatible module-level function)
 # ============================================================================
 
 def check_safety(code: str, tool_type: str = 'python') -> dict:
     """
     Check code safety across 3 layers.
-    
+
     Args:
         code: Python code or Bash script to check
         tool_type: 'python' or 'bash'
-    
+
     Returns:
         {
             "level": "safe" | "warning" | "requires_approval" | "dangerous",
@@ -604,14 +680,14 @@ def check_safety(code: str, tool_type: str = 'python') -> dict:
             "requires_approval": bool,
             "approval_info": dict | None
         }
-    
+
     Examples:
         >>> check_safety("print(2 + 2)")
         {'level': 'safe', 'score': 0, 'reasons': [], ...}
-        
+
         >>> check_safety("import ctypes")
         {'level': 'dangerous', 'score': 12, 'reasons': [...], ...}
-        
+
         >>> check_safety("rm -rf /tmp")
         {'level': 'requires_approval', 'score': 10, 'reasons': [...], ...}
     """

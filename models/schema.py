@@ -573,6 +573,12 @@ class SchemaMixin:
             except sqlite3.OperationalError:
                 pass
 
+            # Migration: add vision_supported column to llm_models if missing
+            try:
+                cursor.execute("ALTER TABLE llm_models ADD COLUMN vision_supported BOOLEAN DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+
             # Create indexes for faster queries
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tests_domain ON tests(domain_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tests_level ON tests(domain_id, level)")
@@ -672,6 +678,45 @@ class SchemaMixin:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_cloud_connectors_workplace ON cloud_connectors(workplace_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_cloud_connectors_token ON cloud_connectors(connector_token)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_agents_workplace ON agents(workplace_id)")
+
+            # ==================== HMADS Safety Rules Table ====================
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS safety_rules (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    pattern TEXT NOT NULL,
+                    pattern_type TEXT DEFAULT 'regex',
+                    weight INTEGER NOT NULL DEFAULT 5,
+                    category TEXT NOT NULL,
+                    tool_scope TEXT DEFAULT 'all',
+                    scope TEXT DEFAULT 'global',
+                    enabled BOOLEAN DEFAULT 1,
+                    is_system BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # Migration: add scope column for existing safety_rules tables (replaces agent_id)
+            try:
+                cursor.execute("ALTER TABLE safety_rules ADD COLUMN scope TEXT DEFAULT 'global'")
+            except sqlite3.OperationalError:
+                pass
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_safety_rules_enabled ON safety_rules(enabled)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_safety_rules_scope ON safety_rules(scope)")
+
+            # Agent ↔ Safety Rule assignment (many-to-many, for scope='specific' rules)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS agent_safety_rules (
+                    agent_id TEXT NOT NULL,
+                    rule_id TEXT NOT NULL,
+                    PRIMARY KEY (agent_id, rule_id),
+                    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+                    FOREIGN KEY (rule_id) REFERENCES safety_rules(id) ON DELETE CASCADE
+                )
+            """)
 
             conn.commit()
 

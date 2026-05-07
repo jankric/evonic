@@ -113,13 +113,13 @@ def _register_builtins():
 
         now = __import__('datetime').datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         # Truncate agent's llm.log file
-        log_path = os.path.join("logs", agent_id, "llm.log")
+        log_path = os.path.join("logs", "agents", agent_id, "llm.log")
         if os.path.exists(log_path):
             with open(log_path, "w") as f:
                 f.write(f"# LLM Log — Cleared on {now} UTC\n")
 
         # Truncate agent's sessrecap.log file
-        recap_path = os.path.join("logs", agent_id, "sessrecap.log")
+        recap_path = os.path.join("logs", "agents", agent_id, "sessrecap.log")
         if os.path.exists(recap_path):
             with open(recap_path, "w") as f:
                 f.write(f"# Session Recap Log — Cleared on {now} UTC\n")
@@ -327,6 +327,12 @@ def _register_builtins():
                     if role == 'assistant' and msg.get('tool_calls') and not (msg.get('content') or '').strip():
                         continue
                     content = msg.get('content', '') or ''
+                    # Skip user slash commands to prevent the LLM from re-issuing them
+                    if role == 'user' and content.startswith('/'):
+                        continue
+                    # Skip assistant responses to slash commands (metadata.slash_command)
+                    if role == 'assistant' and msg.get('metadata', {}).get('slash_command'):
+                        continue
                     if content:
                         parts.append(f'[{role}]: {content}')
 

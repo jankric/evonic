@@ -11,6 +11,8 @@ block content %}
         </button>
         <button class="tab-btn" onclick="showTab('tools')">Tools</button>
         <button class="tab-btn" onclick="showTab('models')">Models</button>
+        <button class="tab-btn" onclick="showTab('logs')">Logs</button>
+        <button class="tab-btn" onclick="showTab('hmads')">HMADS</button>
     </div>
 
     <!-- General Tab -->
@@ -295,6 +297,16 @@ block content %}
             </div>
         </div>
     </div>
+
+    <!-- Logs Tab -->
+    <div id="logs-tab" class="tab-content">
+        {% include 'partials/logs_tab.html' %}
+    </div>
+
+    <!-- HMADS Tab -->
+    <div id="hmads-tab" class="tab-content">
+        {% include 'partials/hmads.html' %}
+    </div>
 </div>
 
 <!-- Model Modal -->
@@ -578,7 +590,6 @@ block content %}
             </button>
         </div>
     </div>
-</div>
 
 <!-- Test Connection Modal (model endpoint test) -->
 <div id="connection-test-modal" class="modal">
@@ -1205,23 +1216,36 @@ block content %}
             statusDiv.classList.remove("hidden");
         }
     }
+    // Tab Management
+    function showTab(tabName) {
+        document
+            .querySelectorAll(".tab-content")
+            .forEach((tab) => tab.classList.remove("active"));
+        document
+            .querySelectorAll(".tab-btn")
+            .forEach((btn) => btn.classList.remove("active"));
 
-    const _origShowTab = showTab;
-    showTab = function (tabName) {
-        _origShowTab(tabName);
+        document.getElementById(`${tabName}-tab`).classList.add("active");
+        document
+            .querySelector(`[onclick="showTab('${tabName}')"]`)
+            .classList.add("active");
+        location.hash = tabName;
+
+        // Tab-specific initialization
         if (tabName === "general") {
             loadDefaultModel();
+        } else if (tabName === "models") {
+            loadModels();
+        } else if (tabName === "logs") {
+            if (window.logViewer) {
+                logViewer.init();
+            }
+        } else if (tabName === "hmads") {
+            if (window.hmads) {
+                hmads.init();
+            }
         }
-    };
-
-    // Load on page load if general tab is active
-    document.addEventListener("DOMContentLoaded", function () {
-        if (
-            document.getElementById("general-tab").classList.contains("active")
-        ) {
-            loadDefaultModel();
-        }
-    });
+    }
 
     // Initialize
     document.addEventListener("DOMContentLoaded", () => {
@@ -1344,30 +1368,12 @@ block content %}
         });
     }
 
-    // Tab Management
-    function showTab(tabName) {
-        document
-            .querySelectorAll(".tab-content")
-            .forEach((tab) => tab.classList.remove("active"));
-        document
-            .querySelectorAll(".tab-btn")
-            .forEach((btn) => btn.classList.remove("active"));
-
-        document.getElementById(`${tabName}-tab`).classList.add("active");
-        document
-            .querySelector(`[onclick="showTab('${tabName}')"]`)
-            .classList.add("active");
-        location.hash = tabName;
-    }
-
     // Restore tab from URL hash on page load
     (function () {
-        const valid = ["general", "tools", "models"];
+        const valid = ["general", "tools", "models", "logs", "hmads"];
         const hash = location.hash.replace("#", "");
         if (valid.includes(hash)) {
-            showTab(hash);
-            if (hash === "models")
-                document.addEventListener("DOMContentLoaded", loadModels);
+            document.addEventListener("DOMContentLoaded", () => showTab(hash));
         }
     })();
 
@@ -2211,15 +2217,6 @@ block content %}
     function closeTestModal() {
         closeModal("connection-test-modal");
     }
-
-    // Load models when models tab is shown
-    const origShowTab = showTab;
-    showTab = function (tabName) {
-        origShowTab(tabName);
-        if (tabName === "models") {
-            loadModels();
-        }
-    };
 
     // ---- Default Model ----
 </script>
