@@ -184,23 +184,51 @@ class TelegramChannel(BaseChannel):
                     from models.db import db
                     agent = db.get_agent(agent_id)
                     if agent and agent.get('vision_enabled'):
-                        if has_photo:
-                            photo = update.message.photo[-1]
-                            file = await context.bot.get_file(photo.file_id)
-                        else:
-                            doc = update.message.document
-                            file = await context.bot.get_file(doc.file_id)
-                        img_bytes = await file.download_as_bytearray()
-                        # Convert to JPEG for consistent LLM input
-                        from io import BytesIO
-                        from PIL import Image
-                        img = Image.open(BytesIO(bytes(img_bytes)))
-                        if img.mode in ('RGBA', 'LA', 'P'):
-                            img = img.convert('RGB')
-                        buf = BytesIO()
-                        img.save(buf, format='JPEG', quality=85)
-                        b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
-                        image_url = f"data:image/jpeg;base64,{b64}"
+                        # LOCAL-PATCH: retry image download on timeout/network error
+                        # MERGE-SAFE: this block replaces the bare get_file() call above.
+                        # When merging upstream, preserve this try/retry block instead of
+                        # reverting to the bare get_file() call.
+                        _max_retries = 3
+                        _img_error = None
+                        for _attempt in range(_max_retries):
+                            try:
+                                if has_photo:
+                                    photo = update.message.photo[-1]
+                                    file = await context.bot.get_file(photo.file_id)
+                                else:
+                                    doc = update.message.document
+                                    file = await context.bot.get_file(doc.file_id)
+                                img_bytes = await file.download_as_bytearray()
+                                # Convert to JPEG for consistent LLM input
+                                from io import BytesIO
+                                from PIL import Image
+                                img = Image.open(BytesIO(bytes(img_bytes)))
+                                if img.mode in ('RGBA', 'LA', 'P'):
+                                    img = img.convert('RGB')
+                                buf = BytesIO()
+                                img.save(buf, format='JPEG', quality=85)
+                                b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+                                image_url = f"data:image/jpeg;base64,{b64}"
+                                _img_error = None
+                                break
+                            except Exception as _e:
+                                _img_error = _e
+                                _logger.warning(
+                                    "[TG-VISION] Image download failed (attempt %d/%d): %s",
+                                    _attempt + 1, _max_retries, _e
+                                )
+                                import asyncio as _asyncio
+                                await _asyncio.sleep(1.5)
+                        if _img_error:
+                            _logger.error(
+                                "[TG-VISION] Image download failed after %d retries: %s",
+                                _max_retries, _img_error
+                            )
+                            if not text:
+                                text = "[Gambar tidak dapat diunduh, coba kirim ulang]"
+                            else:
+                                text = f"[Gagal memuat gambar] {text}"
+                        # END LOCAL-PATCH
                     else:
                         if not text:
                             return
