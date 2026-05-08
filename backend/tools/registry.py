@@ -256,31 +256,45 @@ class ToolRegistry:
 def _builtin_read_factory(agent_context: dict):
     """Factory for the built-in 'read' tool scoped to an agent's KB directory."""
     agent_id = agent_context.get('id', '')
+    # For remote agents (those with a workplace_id), KB files live on the evonic
+    # server at agents/{agent_id}/kb/ — NOT on the remote workspace.  Always use
+    # the local server path in that case, matching what /_self/ resolution does.
+    workplace_id = agent_context.get('workplace_id')
     agent_workspace = agent_context.get('workspace')
-    if agent_workspace:
-        base_dir = os.path.normpath(os.path.join(agent_workspace, 'kb'))
-    else:
+    if workplace_id or not agent_workspace:
         base_dir = os.path.normpath(os.path.join(
             os.path.dirname(__file__), '..', '..', 'agents', agent_id, 'kb'
         ))
+    else:
+        base_dir = os.path.normpath(os.path.join(agent_workspace, 'kb'))
     base_dir = os.path.normpath(base_dir)
 
+    # Tailor description for remote agents who see /_self/kb/ in their system prompt
+    _is_remote = bool(workplace_id)
+    _desc = (
+        "Read a file from this agent's knowledge base (KB). "
+        + ("Pass a bare filename (e.g. 'notes.md') or a /_self/ path (e.g. '/_self/kb/notes.md'). "
+           if _is_remote else
+           "Pass a bare filename only — no paths (e.g. 'notes.md', not '/kb/notes.md'). ")
+        + "This tool is ONLY for KB files. "
+        "To read any other file (source code, logs, workspace files), use read_file instead."
+    )
+    _param_desc = (
+        "Bare KB filename (e.g. 'notes.md') or /_self/ path (e.g. '/_self/kb/notes.md')."
+        if _is_remote else
+        "Bare KB filename, e.g. 'notes.md'. No slashes or paths."
+    )
     tool_def = {
         "type": "function",
         "function": {
             "name": "read",
-            "description": (
-                "Read a file from this agent's knowledge base (KB). "
-                "Pass a bare filename only — no paths (e.g. 'notes.md', not '/kb/notes.md'). "
-                "This tool is ONLY for KB files. "
-                "To read any other file (source code, logs, workspace files), use read_file instead."
-            ),
+            "description": _desc,
             "parameters": {
                 "type": "object",
                 "properties": {
                     "filename": {
                         "type": "string",
-                        "description": "Bare KB filename, e.g. 'notes.md'. No slashes or paths."
+                        "description": _param_desc
                     }
                 },
                 "required": ["filename"]
@@ -290,6 +304,26 @@ def _builtin_read_factory(agent_context: dict):
 
     def executor(args: dict) -> dict:
         filename = args.get('filename', '')
+
+        # /_self/ path: resolve to the agent's local directory on the evonic server.
+        # Remote agents get /_self/kb/ injected into their system prompt, so the
+        # LLM naturally passes /_self/kb/notes.md here.  Handle it like the other
+        # file tools (read_file, write_file, etc.) do.
+        from backend.tools._workspace import is_self_path, resolve_self_path
+        _agent_id = agent_context.get('id', '')
+        if _agent_id and is_self_path(filename):
+            resolved = resolve_self_path(_agent_id, filename)
+            if not resolved:
+                return {"error": "Access denied — path escapes agent directory."}
+            if not os.path.isfile(resolved):
+                return {"error": f"File not found: {filename}"}
+            try:
+                with open(resolved, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return {"filename": filename, "content": content}
+            except Exception as e:
+                return {"error": f"Read error: {str(e)}"}
+
         # Security: only bare filenames allowed
         if '/' in filename or '\\' in filename or '..' in filename:
             return {"error": "This tool only reads KB files by bare filename (e.g. 'notes.md'). To read workspace or other files use the read_file tool instead."}
