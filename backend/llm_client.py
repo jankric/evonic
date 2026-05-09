@@ -516,7 +516,51 @@ class LLMClient:
                         "error_detail": error_msg,
                     }
 
-                result = response.json()
+                # LOCAL-PATCH: handle SSE streaming response from enowxai
+                # MERGE-SAFE: enowxai always returns SSE even when stream=false.
+                # This block detects SSE format and reconstructs a standard JSON response.
+                # When merging upstream, preserve this block before result = response.json().
+                _raw = response.text.strip()
+                if _raw.startswith('data:'):
+                    _content = ''
+                    _finish_reason = None
+                    _model = self.model
+                    _usage = {}
+                    for _line in _raw.splitlines():
+                        _line = _line.strip()
+                        if not _line.startswith('data:'):
+                            continue
+                        _data = _line[5:].strip()
+                        if _data == '[DONE]':
+                            break
+                        try:
+                            import json as _json
+                            _chunk = _json.loads(_data)
+                            _delta = (_chunk.get('choices') or [{}])[0].get('delta', {})
+                            _content += _delta.get('content', '')
+                            _fr = (_chunk.get('choices') or [{}])[0].get('finish_reason')
+                            if _fr:
+                                _finish_reason = _fr
+                            if _chunk.get('model'):
+                                _model = _chunk['model']
+                            if _chunk.get('usage'):
+                                _usage = _chunk['usage']
+                        except Exception:
+                            pass
+                    result = {
+                        'id': 'chatcmpl-sse',
+                        'object': 'chat.completion',
+                        'model': _model,
+                        'choices': [{
+                            'index': 0,
+                            'message': {'role': 'assistant', 'content': _content},
+                            'finish_reason': _finish_reason or 'stop',
+                        }],
+                        'usage': _usage,
+                    }
+                else:
+                    result = response.json()
+                # END LOCAL-PATCH
 
                 # Transform Ollama native response to OpenAI-compatible format
                 if is_ollama_fmt:
