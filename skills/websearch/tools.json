@@ -1,0 +1,66 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "exa_search",
+      "description": "Search the web using Exa AI. Returns relevant web pages with titles, URLs, and text highlights. Use natural language queries describing the ideal page you're looking for. Include 'category:people' or 'category:company' to search LinkedIn profiles or companies.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Natural language search query. Describe the ideal page, not just keywords. E.g. 'blog post comparing React and Vue performance' or 'category:people John Doe software engineer'."
+          },
+          "num_results": {
+            "type": "integer",
+            "description": "Number of results to return (1-100). Default: 10."
+          }
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "exa_get_contents",
+      "description": "Fetch the full text content of one or more web pages by URL. Use after exa_search when highlights are insufficient, or to read any known URL. Returns clean markdown content.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "urls": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "List of URLs to fetch content from (max 10). Batch multiple URLs in one call."
+          },
+          "max_characters": {
+            "type": "integer",
+            "description": "Maximum characters of text to extract per page. Default: 3000."
+          }
+        },
+        "required": ["urls"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "exa_find_similar",
+      "description": "Find web pages similar to a given URL. Useful for discovering related content, alternatives, or competitors. (Uses semantic search internally.)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The reference URL to find similar pages for."
+          },
+          "num_results": {
+            "type": "integer",
+            "description": "Number of similar results to return (1-100). Default: 10."
+          }
+        },
+        "required": ["url"]
+      }
+    }
+  }
+]

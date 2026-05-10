@@ -66,7 +66,7 @@ DESTRUCTIVE_PATTERNS: list[dict[str, Any]] = [
     # Privilege escalation
     {"pattern": r"\bchmod\s+777\b", "weight": 5, "category": "permission_escalation", "description": "Permission escalation (chmod 777)"},
     {"pattern": r"\bchown\s+root\b", "weight": 8, "category": "privilege_escalation", "description": "Privilege escalation (chown root)"},
-    {"pattern": r"\bsudo\s+", "weight": 6, "category": "privilege_escalation", "description": "Privilege escalation (sudo)"},
+    {"pattern": r"\bsudo\s+", "weight": 10, "category": "privilege_escalation", "description": "Privilege escalation (sudo) — requires user approval"},
     # Remote code execution
     {"pattern": r"\bcurl\s+.*\|\s*(ba)?sh\b", "weight": 12, "category": "remote_code_execution", "description": "Remote code execution via pipe (curl | bash)"},
     {"pattern": r"\bwget\s+.*\|\s*(ba)?sh\b", "weight": 12, "category": "remote_code_execution", "description": "Remote code execution via pipe (wget | sh)"},
@@ -160,7 +160,7 @@ BASH_DANGEROUS_PATTERNS: list[dict[str, Any]] = [
     {"pattern": r"\bwget\s+.*\|\s*(ba)?sh\b", "weight": 12, "category": "remote_code_execution", "description": "Remote code execution via pipe (wget | sh)"},
     {"pattern": r"\bchmod\s+777\b", "weight": 5, "category": "permission_escalation", "description": "Permission escalation (chmod 777)"},
     {"pattern": r"\bchown\s+root\b", "weight": 8, "category": "privilege_escalation", "description": "Privilege escalation (chown root)"},
-    {"pattern": r"\bsudo\s+", "weight": 6, "category": "privilege_escalation", "description": "Privilege escalation (sudo)"},
+    {"pattern": r"\bsudo\s+", "weight": 10, "category": "privilege_escalation", "description": "Privilege escalation (sudo) — requires user approval"},
     {"pattern": r"\bdd\s+if=/dev/", "weight": 12, "category": "disk_overwrite", "description": "Disk overwrite command (dd)"},
     {"pattern": r"\bmkfs\b", "weight": 13, "category": "filesystem_format", "description": "Filesystem format command (mkfs)"},
     {"pattern": r"\bshred\b", "weight": 12, "category": "secure_deletion", "description": "Secure file deletion (shred)"},

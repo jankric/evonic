@@ -899,8 +899,15 @@ class AgentRuntime:
             return {"response": None, "buffered": True, "tool_trace": [], "timeline": []}
 
         # No buffering — queue immediately and wait for result
+        # For inter-agent or notifier-triggered messages, send via channel automatically
+        # since there is no Telegram handler waiting to deliver the response.
+        _is_agent_triggered = (
+            (external_user_id or '').startswith('__agent__') or
+            (metadata or {}).get('agent_message') or
+            (metadata or {}).get('agent_reply')
+        )
         task = _QueueTask(agent, SessionContext(session_id, external_user_id, channel_id),
-                          send_via_channel=False)
+                          send_via_channel=bool(channel_id and _is_agent_triggered))
         self._message_queue.put(task)
         task.event.wait()
         return task.result
@@ -1336,7 +1343,7 @@ class AgentRuntime:
                     )
                     if self._is_approval(last_user_text):
                         ms.set_mode('execute', reason='user approved')
-                    elif last_user_text.startswith('[System/Task]'):
+                    elif self._extract_text(last_user).startswith('[System/Task]'):
                         # System-triggered task (e.g. from a plugin): reset to fresh plan mode
                         # so the agent can start a new plan cycle for this task
                         # instead of being stuck in a stale plan from a previous task.
@@ -1473,7 +1480,8 @@ class AgentRuntime:
             if msg.get("content") and msg["content"] != "[Image]":
                 parts.append({"type": "text", "text": msg["content"]})
             parts.append({"type": "image_url", "image_url": {"url": msg_image}})
-            if not parts[0].get("text") if parts else True:
+            # Only add default text if there's no text part at all
+            if not any(p.get("type") == "text" for p in parts):
                 parts.insert(0, {"type": "text", "text": "What is in this image?"})
             entry["content"] = parts
         elif msg.get("content"):
@@ -1503,8 +1511,21 @@ class AgentRuntime:
     ]
 
     @classmethod
-    def _is_approval(cls, text: str) -> bool:
+    @staticmethod
+    def _extract_text(content) -> str:
+        """Extract plain text from a message content that may be a string or multipart list."""
+        if isinstance(content, list):
+            return ' '.join(p.get('text', '') if isinstance(p, dict) else str(p) for p in content)
+        return content if isinstance(content, str) else ''
+
+    @classmethod
+    def _is_approval(cls, text) -> bool:
         """Return True if the text looks like a user approval of a plan."""
+        # Handle multipart messages (e.g. image + text) — extract text parts only
+        if isinstance(text, list):
+            text = ' '.join(p.get('text', '') if isinstance(p, dict) else str(p) for p in text)
+        if not isinstance(text, str):
+            return False
         lowered = text.strip().lower()
         return any(pat in lowered for pat in cls._APPROVAL_PATTERNS)
 

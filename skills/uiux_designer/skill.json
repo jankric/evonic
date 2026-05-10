@@ -1,0 +1,10 @@
+{
+  "id": "uiux_designer",
+  "name": "UI/UX Designer",
+  "version": "1.0.0",
+  "description": "Pure-logic UI/UX design skill providing color systems, typography, layout, component design, accessibility audits, design tokens, and user flow diagrams. Warm Organic aesthetic defaults. No external API dependencies.",
+  "author": "Evonic",
+  "tools_file": "tools.json",
+  "lazy_tools": true,
+  "variables": []
+}

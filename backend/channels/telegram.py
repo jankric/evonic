@@ -5,7 +5,7 @@ import logging
 import re
 import time
 import threading
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 from backend.channels.base import BaseChannel, strip_system_tags
 
 _logger = logging.getLogger(__name__)
@@ -16,6 +16,25 @@ def _strip_markdown(text: str) -> str:
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)  # headers
     text = re.sub(r'\*+', '', text)  # bold/italic
     return text
+
+
+def _parse_forum_user_id(composite_id: str) -> Tuple[str, Optional[int]]:
+    """Parse a composite user ID that may contain a forum thread_id.
+
+    Format:
+        "{chat_id}:t:{thread_id}" -> (chat_id, thread_id)
+        "{chat_id}"               -> (chat_id, None)
+
+    Returns:
+        Tuple of (chat_id_str, thread_id_or_none).
+    """
+    if ':t:' in composite_id:
+        parts = composite_id.split(':t:', 1)
+        try:
+            return parts[0], int(parts[1])
+        except (ValueError, IndexError):
+            return composite_id, None
+    return composite_id, None
 
 
 def _split_message(text: str, max_len: int = 4050) -> list:
@@ -98,12 +117,46 @@ class TelegramChannel(BaseChannel):
         channel_id = self.channel_id
         agent_id = self.agent_id
 
+        config = self.config  # capture for closure access
+
         async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not update.message:
                 return
 
             try:
                 user_id = str(update.message.chat_id)
+                thread_id = getattr(update.message, 'message_thread_id', None)
+                is_topic = getattr(update.message, 'is_topic_message', None)
+                _logger.info(
+                    "[TG-FORUM-DEBUG] chat_id=%s thread_id=%s is_topic=%s "
+                    "chat_type=%s text=%r",
+                    user_id, thread_id, is_topic,
+                    update.message.chat.type if update.message.chat else '?',
+                    (update.message.text or '')[:50]
+                )
+
+                # --- Forum topic routing ---
+                resolved_agent_id = agent_id  # default from closure
+                topic_routing = config.get('topic_routing') or {}
+
+                if thread_id and topic_routing:
+                    mapped = topic_routing.get(str(thread_id))
+                    if mapped:
+                        from models.db import db as _db
+                        mapped_agent = _db.get_agent(mapped)
+                        if mapped_agent and mapped_agent.get('enabled', True):
+                            resolved_agent_id = mapped
+                        else:
+                            _logger.warning(
+                                "Topic %s mapped to agent %s but agent not found/disabled, "
+                                "falling back to default", thread_id, mapped)
+
+                # Session key: include thread_id for isolation
+                if thread_id:
+                    session_user_id = f"{user_id}:t:{thread_id}"
+                else:
+                    session_user_id = user_id
+
                 text = strip_system_tags(update.message.text or update.message.caption or '')
                 image_url = None
 
@@ -182,7 +235,7 @@ class TelegramChannel(BaseChannel):
 
                 if has_photo or has_image_doc:
                     from models.db import db
-                    agent = db.get_agent(agent_id)
+                    agent = db.get_agent(resolved_agent_id)
                     if agent and agent.get('vision_enabled'):
                         # LOCAL-PATCH: retry image download on timeout/network error
                         # MERGE-SAFE: this block replaces the bare get_file() call above.
@@ -236,11 +289,11 @@ class TelegramChannel(BaseChannel):
                     return
 
                 from models.db import db
-                session_id = db.get_or_create_session(agent_id, user_id, channel_id)
+                session_id = db.get_or_create_session(resolved_agent_id, session_user_id, channel_id)
 
                 # Check if bot is enabled for this session
-                if not db.is_session_bot_enabled(session_id, agent_id=agent_id):
-                    db.add_chat_message(session_id, 'user', text or '[Image]', agent_id=agent_id)
+                if not db.is_session_bot_enabled(session_id, agent_id=resolved_agent_id):
+                    db.add_chat_message(session_id, 'user', text or '[Image]', agent_id=resolved_agent_id)
                     return
 
                 # Detect reply/quote: include replied message content as context
@@ -267,7 +320,7 @@ class TelegramChannel(BaseChannel):
                         pass  # Silently skip if we can't resolve the reply
 
                 result = agent_runtime.handle_message(
-                    agent_id, user_id, final_text, channel_id, image_url=image_url
+                    resolved_agent_id, session_user_id, final_text, channel_id, image_url=image_url
                 )
                 if result.get('buffered'):
                     return  # message buffered, response will come from the first caller
@@ -277,13 +330,17 @@ class TelegramChannel(BaseChannel):
                     # user's /command text, which is noisy and unnecessary.
                     is_cmd = text.lstrip().startswith('/')
                     reply_kwargs = {} if is_cmd else {'reply_to_message_id': update.message.message_id}
+                    # Forum topics: explicitly pass message_thread_id so the reply
+                    # lands in the correct topic thread.
+                    if thread_id:
+                        reply_kwargs['message_thread_id'] = thread_id
                     for chunk in _split_message(response):
                         await update.message.reply_text(chunk, **reply_kwargs)
                 from backend.event_stream import event_stream
                 event_stream.emit('message_sent', {
                     'channel_type': 'telegram',
                     'channel_id': channel_id,
-                    'external_user_id': user_id,
+                    'external_user_id': session_user_id,
                     'message': response,
                 })
             except Exception as e:
@@ -355,9 +412,10 @@ class TelegramChannel(BaseChannel):
         def _on_approval_required(data):
             if data.get('channel_id') != channel_id:
                 return
-            user_id = data.get('external_user_id')
-            if not user_id:
+            ext_user_id = data.get('external_user_id')
+            if not ext_user_id:
                 return
+            chat_id_str, thread_id = _parse_forum_user_id(ext_user_id)
             approval_id = data.get('approval_id', '')
             tool_name = data.get('tool_name', '')
             info = data.get('approval_info', {})
@@ -385,13 +443,14 @@ class TelegramChannel(BaseChannel):
                 InlineKeyboardButton("Approve", callback_data=f"approve:{approval_id}"),
                 InlineKeyboardButton("Reject", callback_data=f"reject:{approval_id}"),
             ]])
+            send_kwargs = {"chat_id": int(chat_id_str), "text": text, "reply_markup": keyboard}
+            if thread_id:
+                send_kwargs["message_thread_id"] = thread_id
             try:
                 sent_msg = self._run_async(
-                    self._app.bot.send_message(
-                        chat_id=int(user_id), text=text, reply_markup=keyboard
-                    )
+                    self._app.bot.send_message(**send_kwargs)
                 )
-                _pending_approval_msgs[approval_id] = (int(user_id), sent_msg.message_id)
+                _pending_approval_msgs[approval_id] = (int(chat_id_str), sent_msg.message_id)
             except Exception as e:
                 _logger.error("Failed to send approval prompt: %s", e)
 
@@ -524,9 +583,13 @@ class TelegramChannel(BaseChannel):
     def _do_send(self, external_user_id: str, text: str):
         if not self._app:
             return
+        chat_id, thread_id = _parse_forum_user_id(external_user_id)
         text = _strip_markdown(text)
         for chunk in _split_message(text):
-            self._run_async(self._app.bot.send_message(chat_id=external_user_id, text=chunk))
+            kwargs = {"chat_id": chat_id, "text": chunk}
+            if thread_id:
+                kwargs["message_thread_id"] = thread_id
+            self._run_async(self._app.bot.send_message(**kwargs))
         from backend.event_stream import event_stream
         event_stream.emit('message_sent', {
             'channel_type': 'telegram',
@@ -538,4 +601,8 @@ class TelegramChannel(BaseChannel):
     def send_typing(self, external_user_id: str):
         if not self._app:
             return
-        self._run_async(self._app.bot.send_chat_action(chat_id=external_user_id, action='typing'))
+        chat_id, thread_id = _parse_forum_user_id(external_user_id)
+        kwargs = {"chat_id": chat_id, "action": "typing"}
+        if thread_id:
+            kwargs["message_thread_id"] = thread_id
+        self._run_async(self._app.bot.send_chat_action(**kwargs))

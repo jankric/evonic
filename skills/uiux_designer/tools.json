@@ -1,0 +1,285 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "design_color",
+      "description": "Generate color palettes, check contrast ratios, create dark mode variants, and define semantic color systems. Uses HSL manipulation and WCAG contrast math. Default aesthetic: Warm Organic.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["generate_palette", "check_contrast", "dark_mode", "semantic_colors"],
+            "description": "Action to perform. generate_palette: create full palette from base color. check_contrast: WCAG contrast ratio between two colors. dark_mode: generate dark variant of a palette. semantic_colors: map palette to semantic roles."
+          },
+          "base_color": {
+            "type": "string",
+            "description": "Base color in hex (e.g. '#E8956D') or HSL (e.g. 'hsl(18, 75%, 67%)'). Required for generate_palette and dark_mode."
+          },
+          "foreground": {
+            "type": "string",
+            "description": "Foreground color hex for check_contrast."
+          },
+          "background": {
+            "type": "string",
+            "description": "Background color hex for check_contrast."
+          },
+          "palette": {
+            "type": "object",
+            "description": "Existing palette object for dark_mode or semantic_colors action."
+          },
+          "harmony": {
+            "type": "string",
+            "enum": ["complementary", "analogous", "triadic", "split-complementary", "tetradic", "monochromatic"],
+            "description": "Color harmony type for generate_palette. Default: analogous."
+          },
+          "steps": {
+            "type": "integer",
+            "description": "Number of shade steps (5-12). Default: 10."
+          }
+        },
+        "required": ["action"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "design_typography",
+      "description": "Generate type scales, font pairings, line-height calculations, and letter-spacing (tracking). Uses modular scale ratios and golden ratio math.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["type_scale", "font_pairing", "line_height", "tracking"],
+            "description": "Action to perform. type_scale: generate modular scale. font_pairing: get curated font combinations. line_height: calculate optimal line-height. tracking: calculate letter-spacing."
+          },
+          "base_size": {
+            "type": "number",
+            "description": "Base font size in px for type_scale. Default: 16."
+          },
+          "ratio": {
+            "type": "string",
+            "enum": ["minor-second", "major-second", "minor-third", "major-third", "perfect-fourth", "augmented-fourth", "perfect-fifth", "golden-ratio"],
+            "description": "Scale ratio for type_scale. Default: major-third."
+          },
+          "steps_up": {
+            "type": "integer",
+            "description": "Steps above base for type_scale. Default: 6."
+          },
+          "steps_down": {
+            "type": "integer",
+            "description": "Steps below base for type_scale. Default: 2."
+          },
+          "style": {
+            "type": "string",
+            "enum": ["warm-organic", "editorial", "technical", "minimal", "expressive"],
+            "description": "Font pairing style. Default: warm-organic."
+          },
+          "font_size": {
+            "type": "number",
+            "description": "Font size in px for line_height and tracking calculations."
+          },
+          "content_type": {
+            "type": "string",
+            "enum": ["body", "heading", "ui"],
+            "description": "Content type for line_height calculation. Default: body."
+          }
+        },
+        "required": ["action"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "design_layout",
+      "description": "Generate grid systems, spacing scales, responsive breakpoints, and container specifications. Uses 4px/8px grid math.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["grid_system", "spacing_scale", "breakpoints", "container"],
+            "description": "Action to perform. grid_system: generate column grid. spacing_scale: create spacing tokens. breakpoints: responsive breakpoint definitions. container: max-width container specs."
+          },
+          "columns": {
+            "type": "integer",
+            "description": "Number of grid columns. Default: 12."
+          },
+          "gutter": {
+            "type": "integer",
+            "description": "Gutter width in px (snapped to 4px grid). Default: 24."
+          },
+          "margin": {
+            "type": "integer",
+            "description": "Outer margin in px (snapped to 4px grid). Default: 32."
+          },
+          "max_width": {
+            "type": "integer",
+            "description": "Max container width in px. Default: 1280."
+          },
+          "base": {
+            "type": "integer",
+            "description": "Base spacing unit in px for spacing_scale. Default: 4."
+          },
+          "steps": {
+            "type": "integer",
+            "description": "Number of spacing steps. Default: 16."
+          },
+          "method": {
+            "type": "string",
+            "enum": ["tailwind", "geometric", "multiply"],
+            "description": "Spacing scale method. Default: tailwind."
+          },
+          "padding": {
+            "type": "integer",
+            "description": "Container inline padding in px. Default: 32."
+          }
+        },
+        "required": ["action"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "design_component",
+      "description": "Generate component structures, props APIs, variant styles, and framework-specific code output. Supports React, Vue, Svelte, and vanilla HTML. Warm Organic styling defaults.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["structure", "props_api", "variants", "code_output"],
+            "description": "Action to perform. structure: component anatomy and slots. props_api: TypeScript interface and prop definitions. variants: all variant styles. code_output: framework-specific code."
+          },
+          "component": {
+            "type": "string",
+            "description": "Component name (e.g. 'button', 'input', 'card', 'modal', 'dropdown', 'tabs', 'avatar', 'badge', 'toast', 'tooltip')."
+          },
+          "framework": {
+            "type": "string",
+            "enum": ["react", "vue", "svelte", "html"],
+            "description": "Target framework for code_output. Default: react."
+          },
+          "variant": {
+            "type": "string",
+            "description": "Specific variant for code_output (e.g. 'primary', 'secondary', 'ghost'). Default: primary."
+          },
+          "size": {
+            "type": "string",
+            "enum": ["sm", "md", "lg"],
+            "description": "Component size. Default: md."
+          }
+        },
+        "required": ["action", "component"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "design_audit",
+      "description": "WCAG accessibility checks, contrast audits, ARIA guidance, and design token generation/conversion. Supports W3C DTCG JSON, Tailwind, CSS variables, SCSS, and JS/TS exports.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["wcag_check", "contrast_audit", "aria_guidance", "generate_tokens"],
+            "description": "Action to perform. wcag_check: check element against WCAG criteria. contrast_audit: batch contrast check for color pairs. aria_guidance: ARIA attributes for a component. generate_tokens: convert design values to token formats."
+          },
+          "element_type": {
+            "type": "string",
+            "description": "Element type for wcag_check (e.g. 'text', 'button', 'image', 'form', 'link', 'heading')."
+          },
+          "properties": {
+            "type": "object",
+            "description": "Element properties for wcag_check (e.g. {font_size: 14, color: '#333', background: '#fff'})."
+          },
+          "color_pairs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {"type": "string"},
+                "foreground": {"type": "string"},
+                "background": {"type": "string"}
+              }
+            },
+            "description": "Array of {name, foreground, background} for contrast_audit."
+          },
+          "component": {
+            "type": "string",
+            "description": "Component name for aria_guidance."
+          },
+          "tokens": {
+            "type": "object",
+            "description": "Design tokens object for generate_tokens (W3C DTCG format input)."
+          },
+          "format": {
+            "type": "string",
+            "enum": ["dtcg", "tailwind", "css", "scss", "js", "ts", "all"],
+            "description": "Output format for generate_tokens. Default: all."
+          }
+        },
+        "required": ["action"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "design_flow",
+      "description": "Generate user flow diagrams (Mermaid), heuristic evaluations (Nielsen's 10), and UX copy suggestions. Pure logic, no external dependencies.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["user_flow", "heuristic_eval", "ux_copy"],
+            "description": "Action to perform. user_flow: generate Mermaid flowchart. heuristic_eval: evaluate against Nielsen's heuristics. ux_copy: generate UX microcopy."
+          },
+          "flow_name": {
+            "type": "string",
+            "description": "Name of the user flow for user_flow action."
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "label": {"type": "string"},
+                "type": {"type": "string", "enum": ["action", "decision", "page", "system", "start", "end"]},
+                "next": {"type": "array", "items": {"type": "string"}}
+              }
+            },
+            "description": "Flow steps for user_flow. Each step has id, label, type, and next (array of next step IDs)."
+          },
+          "context": {
+            "type": "object",
+            "description": "Context for heuristic_eval: {product, screen, description, issues (optional array)}."
+          },
+          "copy_type": {
+            "type": "string",
+            "enum": ["button", "error", "empty_state", "onboarding", "confirmation", "tooltip", "notification", "placeholder"],
+            "description": "Type of UX copy to generate."
+          },
+          "copy_context": {
+            "type": "string",
+            "description": "Context/scenario for UX copy generation."
+          },
+          "tone": {
+            "type": "string",
+            "enum": ["friendly", "professional", "playful", "minimal", "urgent"],
+            "description": "Tone for UX copy. Default: friendly (Warm Organic)."
+          }
+        },
+        "required": ["action"]
+      }
+    }
+  }
+]
