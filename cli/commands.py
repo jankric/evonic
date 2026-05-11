@@ -20,8 +20,22 @@ for lib_dir in ("lib",):
         sys.path.insert(0, lib_path)
 
 
-# PID file location
-PID_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "run")
+# PID file location.
+#
+# After migration to the release-based layout the canonical run/ directory
+# lives at ``<app_root>/shared/run/`` (supervisor writes the daemon PID
+# there). Pre-migration installs still use ``<install_root>/run/``. Resolve
+# whichever is present so ``evonic status``/``evonic stop`` find a daemon
+# regardless of whether it was launched by the legacy in-process path or by
+# supervisor.
+def _resolve_pid_dir():
+    shared_run = os.path.join(ROOT, "shared", "run")
+    if os.path.isdir(shared_run):
+        return shared_run
+    return os.path.join(ROOT, "run")
+
+
+PID_DIR = _resolve_pid_dir()
 PID_FILE = os.path.join(PID_DIR, "evonic.pid")
 
 
@@ -216,6 +230,29 @@ def start_server(port=None, host=None, debug=None, daemon=False):
 
     if debug:
         print("Debug mode: ON")
+
+    # Foreground release-mode parity: if the app was migrated to release-based
+    # layout, exec the release's python on its app.py (mirrors daemon path).
+    # Falls through to legacy in-process import when no release is staged.
+    current_link = os.path.join(ROOT, "current")
+    sup_cfg_path = os.path.join(ROOT, "supervisor", "config.json")
+    release_mode = os.path.islink(current_link) and os.path.exists(sup_cfg_path)
+    if release_mode:
+        release_path = os.path.realpath(current_link)
+        if sys.platform == "win32":
+            release_py = os.path.join(release_path, ".venv", "Scripts", "python.exe")
+        else:
+            release_py = os.path.join(release_path, ".venv", "bin", "python")
+        release_app = os.path.join(release_path, "app.py")
+        if os.path.exists(release_py) and os.path.exists(release_app):
+            print(EVONIC_BANNER)
+            print(f"Starting server (Ctrl+C to stop)")
+            print(f"Host: {host}")
+            print(f"Port: {port}")
+            print(f"URL: http://{host if host != '0.0.0.0' else 'localhost'}:{port}")
+            os.chdir(release_path)
+            os.execv(release_py, [release_py, release_app])
+            # execv replaces the process; lines below unreachable.
 
     try:
         from app import app
@@ -2469,7 +2506,6 @@ def reconfigure_wizard(supervisor=False):
             print("  Error: Passwords do not match. Try again.")
             continue
         new_hash = generate_password_hash(pw1)
-        from backend.setup import _update_env_var
 
         _update_env_var(env_path, "ADMIN_PASSWORD_HASH", new_hash)
         print("  Password set successfully.")
@@ -2478,29 +2514,13 @@ def reconfigure_wizard(supervisor=False):
 
 
 def _update_env_var(env_path, key, value):
-    """Update or add an environment variable in a .env file."""
-    if not os.path.exists(env_path):
-        with open(env_path, "w") as f:
-            f.write(f"{key}={value}\n")
-        return
+    """Update or add an environment variable in a .env file.
 
-    with open(env_path, "r") as f:
-        lines = f.readlines()
-
-    found = False
-    for i, line in enumerate(lines):
-        if line.startswith(f"{key}=") or line.startswith(f"{key} "):
-            lines[i] = f"{key}={value}\n"
-            found = True
-            break
-
-    if not found:
-        if lines and not lines[-1].endswith("\n"):
-            lines.append("\n")
-        lines.append(f"{key}={value}\n")
-
-    with open(env_path, "w") as f:
-        f.writelines(lines)
+    Delegates to backend.setup._update_env_var which uses atomic
+    write (write-to-temp-then-rename) to prevent partial .env writes.
+    """
+    from backend.setup import _update_env_var as _impl
+    _impl(env_path, key, value)
 
 
 # ─── Update / Self-Update ──────────────────────────────────────────────────────

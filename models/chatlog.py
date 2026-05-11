@@ -55,6 +55,9 @@ def session_slug(external_user_id: str, agent_id: str) -> str:
 
     Example: session_slug('alice', 'siwa') → 'a1b2c3d4' (8 hex chars)
     """
+    # Guard against None — convert to empty string so sorting doesn't crash
+    external_user_id = external_user_id or ''
+    agent_id = agent_id or ''
     items = sorted([external_user_id, agent_id])
     h = hashlib.sha1(json.dumps(items).encode()).hexdigest()
     return h[:8]
@@ -413,9 +416,13 @@ def _fix_interleaved_user_messages(msgs: List[Dict[str, Any]]) -> List[Dict[str,
                     tool_responses.append(next_msg)
                     found_ids.add(next_tc_id)
                     j += 1
-                elif next_role in ('user', 'system') and not tool_responses:
-                    # Defer: encountered before any tool response — was recorded
-                    # out-of-order due to mid-execution injection.
+                elif next_role in ('user', 'system'):
+                    # Defer: user/system message was recorded out-of-order due to
+                    # mid-execution injection. This can happen before ANY tool response
+                    # OR between tool responses (e.g., tc1 done, user sends message,
+                    # tc2 still running). Always defer to after all tool responses so
+                    # the API sees tool messages immediately following the tool_calls
+                    # assistant message.
                     deferred.append(next_msg)
                     j += 1
                 else:
@@ -454,6 +461,11 @@ def _reconstruct_llm_messages(entries: List[dict]) -> List[Dict[str, Any]]:
             i += 1
 
         elif etype == 'user':
+            # Skip slash command user messages — they are handled directly by
+            # the command executor and must never enter LLM context.
+            if (entry.get('metadata') or {}).get('slash_command'):
+                i += 1
+                continue
             _pending_reasoning = ''  # reasoning before a user message is irrelevant
             _pending_tool_ids = []
             msg: Dict[str, Any] = {'role': 'user', 'content': content}
@@ -477,6 +489,11 @@ def _reconstruct_llm_messages(entries: List[dict]) -> List[Dict[str, Any]]:
             i += 1
 
         elif etype == 'system':
+            # Skip slash command responses — they were saved with metadata.slash_command
+            # and must never enter LLM context.
+            if (entry.get('metadata') or {}).get('slash_command'):
+                i += 1
+                continue
             # System injections were sent as user messages to the LLM
             _pending_tool_ids = []
             messages.append({'role': 'user', 'content': content})
