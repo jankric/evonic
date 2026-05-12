@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}OAuth Accounts{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">OAuth Accounts</h1>
+        <a href="/auth/openai/login" class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition">
+            + Connect ChatGPT
+        </a>
+    </div>
+
+    {% if request.args.get('success') %}
+    <div class="mb-4 p-3 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 rounded-lg text-sm">
+        ✓ Account connected successfully!
+    </div>
+    {% endif %}
+
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <table class="w-full text-sm">
+            <thead class="bg-gray-50 dark:bg-gray-700/50">
+                <tr>
+                    <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Email</th>
+                    <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Provider</th>
+                    <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Plan</th>
+                    <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Status</th>
+                    <th class="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-300">Expires</th>
+                    <th class="px-4 py-3 text-right font-medium text-gray-600 dark:text-gray-300">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="oauth-accounts-body">
+                <tr><td colspan="6" class="px-4 py-8 text-center text-gray-400">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="mt-4 text-xs text-gray-500 dark:text-gray-400">
+        <p>OAuth accounts use your ChatGPT Plus/Pro subscription directly via OpenAI's API.</p>
+        <p>Tokens auto-refresh in the background. If status shows "expired", click Refresh or re-login.</p>
+    </div>
+</div>
+
+<script>
+async function loadAccounts() {
+    const resp = await fetch('/api/oauth/accounts');
+    const accounts = await resp.json();
+    const tbody = document.getElementById('oauth-accounts-body');
+
+    if (!accounts.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-400">No accounts connected. Click "Connect ChatGPT" to add one.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = accounts.map(a => {
+        const expiresDate = a.expires_at ? new Date(a.expires_at).toLocaleString() : 'N/A';
+        const statusColor = a.status === 'active' ? 'text-green-600' : 'text-red-600';
+        return `<tr class="border-t border-gray-100 dark:border-gray-700">
+            <td class="px-4 py-3 text-gray-900 dark:text-white">${a.email}</td>
+            <td class="px-4 py-3 text-gray-600 dark:text-gray-300">${a.provider}</td>
+            <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">${a.plan_type}</span></td>
+            <td class="px-4 py-3 ${statusColor} font-medium">${a.status}</td>
+            <td class="px-4 py-3 text-gray-500 dark:text-gray-400 text-xs">${expiresDate}</td>
+            <td class="px-4 py-3 text-right space-x-2">
+                <button onclick="refreshAccount('${a.id}')" class="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded hover:bg-blue-200 transition">Refresh</button>
+                <button onclick="deleteAccount('${a.id}')" class="text-xs px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded hover:bg-red-200 transition">Remove</button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+async function refreshAccount(id) {
+    const resp = await fetch(`/api/oauth/accounts/${id}/refresh`, { method: 'POST' });
+    const data = await resp.json();
+    if (resp.ok) {
+        alert('Token refreshed: ' + data.email);
+    } else {
+        alert('Refresh failed: ' + (data.error || 'Unknown error'));
+    }
+    loadAccounts();
+}
+
+async function deleteAccount(id) {
+    if (!confirm('Remove this OAuth account?')) return;
+    await fetch(`/api/oauth/accounts/${id}`, { method: 'DELETE' });
+    loadAccounts();
+}
+
+loadAccounts();
+</script>
+{% endblock %}

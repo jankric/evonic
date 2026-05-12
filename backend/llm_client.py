@@ -169,6 +169,15 @@ class LLMClient:
             self.max_tokens = model_config.get("max_tokens")
             self.temperature = model_config.get("temperature")
             self.api_format = model_config.get("api_format", "openai")
+            self._oauth_provider = model_config.get("provider")
+
+            # ChatGPT OAuth: resolve access token dynamically
+            if self._oauth_provider == "chatgpt-oauth":
+                from backend.oauth_refresh import get_valid_access_token, OPENAI_API_BASE
+                oauth_account_id = model_config.get("oauth_account_id")
+                if oauth_account_id:
+                    self.base_url = OPENAI_API_BASE
+                    self.api_key = get_valid_access_token(oauth_account_id)
         else:
             try:
                 from models.db import db
@@ -372,6 +381,12 @@ class LLMClient:
         # requests that lack a system message with error 11101.
         if not processed_messages or processed_messages[0].get('role') != 'system':
             processed_messages.insert(0, {"role": "system", "content": "You are a helpful assistant."})
+
+        # ChatGPT OAuth: prepend required Codex system prompt
+        if getattr(self, '_oauth_provider', None) == 'chatgpt-oauth':
+            from backend.oauth_refresh import CODEX_SYSTEM_PROMPT
+            codex_msg = {"role": "system", "content": CODEX_SYSTEM_PROMPT}
+            processed_messages.insert(0, codex_msg)
 
         # Merge multiple leading system messages into one to satisfy strict chat
         # templates (e.g. Llama 3.x) that only allow a single system message.

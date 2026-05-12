@@ -718,6 +718,22 @@ class SchemaMixin:
                 )
             """)
 
+            # OAuth accounts for ChatGPT/OpenAI subscription auth
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS oauth_accounts (
+                    id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    provider TEXT NOT NULL DEFAULT 'chatgpt',
+                    refresh_token TEXT NOT NULL,
+                    access_token TEXT,
+                    expires_at INTEGER,
+                    plan_type TEXT DEFAULT 'plus',
+                    status TEXT DEFAULT 'active',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             conn.commit()
 
         # Migrate chat data from main DB to per-agent DBs
