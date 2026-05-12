@@ -142,6 +142,29 @@ def openai_login():
     return redirect(auth_url)
 
 
+@oauth_bp.route("/api/oauth/proxy-status", methods=["GET"])
+def api_oauth_proxy_status():
+    """Return which account is currently active in the proxy."""
+    import json, os
+    auth_file = "/home/mimin/.config/openai-oauth/auth.json"
+    # Find active account by matching access_token in auth.json vs DB
+    try:
+        with open(auth_file) as f:
+            auth = json.load(f)
+        proxy_token = auth.get('tokens', {}).get('access_token', '')
+        accounts = db.get_oauth_accounts()
+        for acc in accounts:
+            if acc.get('access_token') == proxy_token:
+                return jsonify({"active_email": acc['email'], "account_id": acc['id']})
+    except Exception:
+        pass
+    # Fallback: return highest-priority enabled account
+    active = db.get_active_oauth_accounts('chatgpt')
+    if active:
+        return jsonify({"active_email": active[0]['email'], "account_id": active[0]['id']})
+    return jsonify({"active_email": None})
+
+
 @oauth_bp.route("/api/oauth/accounts", methods=["GET"])
 def api_list_oauth_accounts():
     """List all OAuth accounts (tokens stripped)."""
@@ -180,22 +203,31 @@ def api_refresh_oauth_account(account_id):
 
 @oauth_bp.route("/api/oauth/accounts/<account_id>/toggle", methods=["POST"])
 def api_toggle_oauth_account(account_id):
-    """Toggle enabled/disabled for an account."""
+    """Toggle enabled/disabled for an account, then sync proxy to active account."""
     account = db.get_oauth_account(account_id)
     if not account:
         return jsonify({"error": "Account not found"}), 404
     new_state = not bool(account.get('enabled', 1))
     db.set_oauth_enabled(account_id, new_state)
-    return jsonify({"status": "ok", "enabled": new_state})
+
+    # Sync proxy to highest-priority enabled account
+    from backend.oauth_refresh import sync_proxy_account
+    active_email = sync_proxy_account()
+
+    return jsonify({"status": "ok", "enabled": new_state, "proxy_account": active_email})
 
 
 @oauth_bp.route("/api/oauth/accounts/<account_id>/priority", methods=["POST"])
 def api_set_oauth_priority(account_id):
-    """Set priority for an account."""
+    """Set priority for an account, then sync proxy."""
     data = request.get_json() or {}
     priority = data.get('priority', 0)
     db.set_oauth_priority(account_id, int(priority))
-    return jsonify({"status": "ok", "priority": priority})
+
+    from backend.oauth_refresh import sync_proxy_account
+    active_email = sync_proxy_account()
+
+    return jsonify({"status": "ok", "priority": priority, "proxy_account": active_email})
 
 
 @oauth_bp.route("/oauth-accounts")

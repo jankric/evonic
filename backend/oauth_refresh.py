@@ -202,3 +202,53 @@ def refresh_all_expiring_accounts():
                 refreshed += 1
     if refreshed:
         logger.info("OAuth refresh job: refreshed %d accounts", refreshed)
+
+
+OAUTH_PROXY_AUTH_FILE = "/home/mimin/.config/openai-oauth/auth.json"
+OAUTH_PROXY_SERVICE = "openai-oauth-proxy-0"
+
+
+def sync_proxy_account() -> Optional[str]:
+    """Update proxy auth.json to use the highest-priority enabled account.
+    Restarts the proxy service after updating.
+    Returns the email of the active account, or None if no account available.
+    """
+    import json
+    import os
+    import subprocess
+    from models.db import db
+
+    accounts = db.get_active_oauth_accounts('chatgpt')
+    if not accounts:
+        logger.warning("sync_proxy_account: no enabled active accounts found")
+        return None
+
+    account = accounts[0]  # lowest priority number = highest priority
+    token = get_valid_access_token(account['id'])
+    if not token:
+        logger.error("sync_proxy_account: failed to get token for %s", account['email'])
+        return None
+
+    auth_data = {
+        "tokens": {
+            "access_token": token,
+            "refresh_token": account['refresh_token'],
+            "id_token": token,
+        }
+    }
+
+    os.makedirs(os.path.dirname(OAUTH_PROXY_AUTH_FILE), exist_ok=True)
+    with open(OAUTH_PROXY_AUTH_FILE, 'w') as f:
+        json.dump(auth_data, f, indent=2)
+
+    # Restart proxy service to pick up new auth.json
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "restart", OAUTH_PROXY_SERVICE],
+            check=True, capture_output=True, timeout=10
+        )
+        logger.info("sync_proxy_account: proxy restarted with account %s", account['email'])
+    except Exception as e:
+        logger.error("sync_proxy_account: failed to restart proxy: %s", e)
+
+    return account['email']

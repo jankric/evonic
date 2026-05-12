@@ -45,7 +45,8 @@ function usagePercent(expires_at) {
     return Math.max(0, Math.min(100, Math.round(used / totalMs * 100)));
 }
 
-function renderAccount(a) {
+function renderAccount(a, proxyEmail) {
+    const isProxyActive = proxyEmail && a.email === proxyEmail;
     const statusColor = a.status === 'active'
         ? 'bg-green-500 text-white'
         : 'bg-red-500 text-white';
@@ -66,6 +67,7 @@ function renderAccount(a) {
                     <span class="px-2 py-0.5 text-xs rounded-full font-medium ${statusColor}">${a.status}</span>
                     <span class="px-2 py-0.5 text-xs rounded-full font-medium ${planColor}">${(a.plan_type||'plus').toUpperCase()}</span>
                     <span class="px-2 py-0.5 text-xs rounded-full font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">${a.provider}</span>
+                    ${isProxyActive ? '<span class="px-2 py-0.5 text-xs rounded-full font-medium bg-emerald-500 text-white animate-pulse">⚡ PROXY ACTIVE</span>' : ''}
                 </div>
             </div>
             <button onclick="deleteAccount('${a.id}')" class="text-gray-400 hover:text-red-500 transition p-1" title="Remove">
@@ -126,8 +128,13 @@ function renderAccount(a) {
 }
 
 async function loadAccounts() {
-    const resp = await fetch('/api/oauth/accounts');
+    const [resp, proxyResp] = await Promise.all([
+        fetch('/api/oauth/accounts'),
+        fetch('/api/oauth/proxy-status')
+    ]);
     const accounts = await resp.json();
+    const proxyData = proxyResp.ok ? await proxyResp.json() : {};
+    const proxyEmail = proxyData.active_email || null;
     const container = document.getElementById('accounts-container');
 
     if (!accounts.length) {
@@ -139,7 +146,7 @@ async function loadAccounts() {
         </div>`;
         return;
     }
-    container.innerHTML = accounts.map(renderAccount).join('');
+    container.innerHTML = accounts.map(a => renderAccount(a, proxyEmail)).join('');
 }
 
 async function toggleAccount(id, currentEnabled) {
