@@ -7,7 +7,7 @@ import secrets
 import time
 import logging
 import requests
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OPENAI_API_BASE = "https://api.openai.com/v1"
 # Fixed callback port used by Codex CLI — OpenAI only accepts this redirect_uri
 OPENAI_OAUTH_CALLBACK_PORT = 1455
-OPENAI_OAUTH_REDIRECT_URI = f"http://localhost:{OPENAI_OAUTH_CALLBACK_PORT}/callback"
+OPENAI_OAUTH_REDIRECT_URI = f"http://localhost:{OPENAI_OAUTH_CALLBACK_PORT}/auth/callback"
 
 # Codex system prompt required by OpenAI for OAuth-based API access
 CODEX_SYSTEM_PROMPT = (
@@ -126,10 +126,7 @@ def is_token_expired(expires_at: int) -> bool:
 
 
 def get_valid_access_token(account_id: str) -> Optional[str]:
-    """Get a valid access token for an OAuth account, refreshing if needed.
-    
-    Returns the access token string or None if refresh fails.
-    """
+    """Get a valid access token for an OAuth account, refreshing if needed."""
     from models.db import db
 
     account = db.get_oauth_account(account_id)
@@ -141,11 +138,9 @@ def get_valid_access_token(account_id: str) -> Optional[str]:
         logger.warning("OAuth account %s is not active (status=%s)", account_id, account['status'])
         return None
 
-    # Check if token needs refresh
     if not is_token_expired(account.get('expires_at')):
         return account.get('access_token')
 
-    # Refresh the token
     logger.info("Refreshing OAuth token for account %s (%s)", account_id, account.get('email'))
     try:
         result = refresh_access_token(account['refresh_token'])
@@ -154,7 +149,6 @@ def get_valid_access_token(account_id: str) -> Optional[str]:
         expires_in = result.get('expires_in', 864000)
         new_expires_at = int(time.time() * 1000) + (expires_in * 1000)
 
-        # Update DB with new tokens
         db.update_oauth_tokens(
             account_id,
             refresh_token=new_refresh,
@@ -168,6 +162,31 @@ def get_valid_access_token(account_id: str) -> Optional[str]:
         logger.error("Failed to refresh OAuth token for %s: %s", account.get('email'), e)
         db.update_oauth_status(account_id, 'expired')
         return None
+
+
+def get_token_with_fallback(provider: str = 'chatgpt',
+                             exclude_ids: List[str] = None) -> Optional[tuple]:
+    """Get a valid access token using fallback across enabled accounts.
+    
+    Returns (account_id, access_token) or None if all accounts exhausted.
+    """
+    from models.db import db
+
+    exclude = list(exclude_ids or [])
+    tried = list(exclude)
+
+    while True:
+        account = db.get_next_available_oauth_account(provider, exclude_ids=tried)
+        if not account:
+            logger.warning("All OAuth accounts exhausted for provider=%s", provider)
+            return None
+
+        token = get_valid_access_token(account['id'])
+        if token:
+            return (account['id'], token)
+
+        # Token invalid, try next
+        tried.append(account['id'])
 
 
 def refresh_all_expiring_accounts():

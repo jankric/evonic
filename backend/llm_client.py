@@ -170,14 +170,17 @@ class LLMClient:
             self.temperature = model_config.get("temperature")
             self.api_format = model_config.get("api_format", "openai")
             self._oauth_provider = model_config.get("provider")
+            self._oauth_account_id = model_config.get("oauth_account_id")
+            self._oauth_tried_ids = []
 
             # ChatGPT OAuth: resolve access token dynamically
             if self._oauth_provider == "chatgpt-oauth":
-                from backend.oauth_refresh import get_valid_access_token, OPENAI_API_BASE
-                oauth_account_id = model_config.get("oauth_account_id")
-                if oauth_account_id:
-                    self.base_url = OPENAI_API_BASE
-                    self.api_key = get_valid_access_token(oauth_account_id)
+                from backend.oauth_refresh import get_token_with_fallback, OPENAI_API_BASE
+                result = get_token_with_fallback('chatgpt')
+                if result:
+                    self._oauth_account_id, self.api_key = result
+                    self._oauth_tried_ids.append(self._oauth_account_id)
+                self.base_url = OPENAI_API_BASE
         else:
             try:
                 from models.db import db
@@ -524,6 +527,24 @@ class LLMClient:
                     return last_error_result
 
                 if response.status_code != 200:
+                    # ChatGPT OAuth: auto-fallback on 429 rate limit
+                    if (response.status_code == 429
+                            and getattr(self, '_oauth_provider', None) == 'chatgpt-oauth'):
+                        from backend.oauth_refresh import get_token_with_fallback
+                        tried = getattr(self, '_oauth_tried_ids', [])
+                        result = get_token_with_fallback('chatgpt', exclude_ids=tried)
+                        if result:
+                            new_id, new_token = result
+                            self._oauth_account_id = new_id
+                            self.api_key = new_token
+                            self._oauth_tried_ids = tried + [new_id]
+                            headers['Authorization'] = f'Bearer {new_token}'
+                            import logging as _log
+                            _log.getLogger(__name__).info(
+                                'OAuth 429 fallback to account %s', new_id
+                            )
+                            continue  # retry with new token
+
                     error_msg = (
                         f"LLM API error: {response.status_code} - {response.text[:200]}"
                     )

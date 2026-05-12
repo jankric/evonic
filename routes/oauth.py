@@ -178,6 +178,26 @@ def api_refresh_oauth_account(account_id):
     return jsonify({"error": "Refresh failed — account may need re-login"}), 500
 
 
+@oauth_bp.route("/api/oauth/accounts/<account_id>/toggle", methods=["POST"])
+def api_toggle_oauth_account(account_id):
+    """Toggle enabled/disabled for an account."""
+    account = db.get_oauth_account(account_id)
+    if not account:
+        return jsonify({"error": "Account not found"}), 404
+    new_state = not bool(account.get('enabled', 1))
+    db.set_oauth_enabled(account_id, new_state)
+    return jsonify({"status": "ok", "enabled": new_state})
+
+
+@oauth_bp.route("/api/oauth/accounts/<account_id>/priority", methods=["POST"])
+def api_set_oauth_priority(account_id):
+    """Set priority for an account."""
+    data = request.get_json() or {}
+    priority = data.get('priority', 0)
+    db.set_oauth_priority(account_id, int(priority))
+    return jsonify({"status": "ok", "priority": priority})
+
+
 @oauth_bp.route("/oauth-accounts")
 def oauth_accounts_page():
     """Render OAuth accounts management page."""
