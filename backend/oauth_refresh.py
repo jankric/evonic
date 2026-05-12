@@ -16,6 +16,9 @@ OPENAI_AUTH_URL = "https://auth.openai.com/oauth/authorize"
 OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
 OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OPENAI_API_BASE = "https://api.openai.com/v1"
+# Fixed callback port used by Codex CLI — OpenAI only accepts this redirect_uri
+OPENAI_OAUTH_CALLBACK_PORT = 1455
+OPENAI_OAUTH_REDIRECT_URI = f"http://localhost:{OPENAI_OAUTH_CALLBACK_PORT}/callback"
 
 # Codex system prompt required by OpenAI for OAuth-based API access
 CODEX_SYSTEM_PROMPT = (
@@ -46,6 +49,8 @@ def build_authorize_url(redirect_uri: str, state: str, code_challenge: str) -> s
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
         "state": state,
+        "id_token_add_organizations": "true",
+        "codex_cli_simplified_flow": "true",
     }
     query = "&".join(f"{k}={requests.utils.quote(str(v))}" for k, v in params.items())
     return f"{OPENAI_AUTH_URL}?{query}"
