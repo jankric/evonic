@@ -718,6 +718,34 @@ class SchemaMixin:
                 )
             """)
 
+            # OAuth accounts for ChatGPT/OpenAI subscription auth
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS oauth_accounts (
+                    id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    provider TEXT NOT NULL DEFAULT 'chatgpt',
+                    refresh_token TEXT NOT NULL,
+                    access_token TEXT,
+                    expires_at INTEGER,
+                    plan_type TEXT DEFAULT 'plus',
+                    status TEXT DEFAULT 'active',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Migration: add enabled/priority columns if they don't exist yet
+            for col, definition in [
+                ('enabled', 'INTEGER NOT NULL DEFAULT 1'),
+                ('priority', 'INTEGER NOT NULL DEFAULT 0'),
+            ]:
+                try:
+                    cursor.execute(f'ALTER TABLE oauth_accounts ADD COLUMN {col} {definition}')
+                except Exception:
+                    pass  # Column already exists
+
             conn.commit()
 
         # Migrate chat data from main DB to per-agent DBs

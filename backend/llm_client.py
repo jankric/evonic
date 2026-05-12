@@ -169,6 +169,18 @@ class LLMClient:
             self.max_tokens = model_config.get("max_tokens")
             self.temperature = model_config.get("temperature")
             self.api_format = model_config.get("api_format", "openai")
+            self._oauth_provider = model_config.get("provider")
+            self._oauth_account_id = model_config.get("oauth_account_id")
+            self._oauth_tried_ids = []
+
+            # ChatGPT OAuth: resolve access token dynamically
+            if self._oauth_provider == "chatgpt-oauth":
+                from backend.oauth_refresh import get_token_with_fallback, OPENAI_API_BASE
+                result = get_token_with_fallback('chatgpt')
+                if result:
+                    self._oauth_account_id, self.api_key = result
+                    self._oauth_tried_ids.append(self._oauth_account_id)
+                self.base_url = OPENAI_API_BASE
         else:
             try:
                 from models.db import db
@@ -373,6 +385,12 @@ class LLMClient:
         if not processed_messages or processed_messages[0].get('role') != 'system':
             processed_messages.insert(0, {"role": "system", "content": "You are a helpful assistant."})
 
+        # ChatGPT OAuth: prepend required Codex system prompt
+        if getattr(self, '_oauth_provider', None) == 'chatgpt-oauth':
+            from backend.oauth_refresh import CODEX_SYSTEM_PROMPT
+            codex_msg = {"role": "system", "content": CODEX_SYSTEM_PROMPT}
+            processed_messages.insert(0, codex_msg)
+
         # Merge multiple leading system messages into one to satisfy strict chat
         # templates (e.g. Llama 3.x) that only allow a single system message.
         n_sys = 0
@@ -509,6 +527,27 @@ class LLMClient:
                     return last_error_result
 
                 if response.status_code != 200:
+                    # ChatGPT OAuth: auto-fallback on 429 rate limit
+                    if (response.status_code == 429
+                            and getattr(self, '_oauth_provider', None) == 'chatgpt-oauth'):
+                        # Rotate to next proxy port (10531 → 10532 → 10533)
+                        _proxy_ports = [10531, 10532, 10533]
+                        _tried_ports = getattr(self, '_oauth_tried_ports', [])
+                        _current_port = int((self.base_url or '').split(':')[-1].split('/')[0] or 10531)
+                        if _current_port not in _tried_ports:
+                            _tried_ports.append(_current_port)
+                        _next_ports = [p for p in _proxy_ports if p not in _tried_ports]
+                        if _next_ports:
+                            _next_port = _next_ports[0]
+                            self.base_url = f'http://127.0.0.1:{_next_port}/v1'
+                            self._oauth_tried_ports = _tried_ports
+                            url = f'{self.base_url}/chat/completions'
+                            import logging as _log
+                            _log.getLogger(__name__).info(
+                                'OAuth 429 fallback to proxy port %s', _next_port
+                            )
+                            continue  # retry with new proxy
+
                     error_msg = (
                         f"LLM API error: {response.status_code} - {response.text[:200]}"
                     )

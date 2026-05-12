@@ -72,6 +72,7 @@
                 <a href="/skills" class="{{ 'nav-active' if request.path.startswith('/skills') else '' }}">Skills</a>
                 <a href="/plugins" class="{{ 'nav-active' if request.path.startswith('/plugins') else '' }}">Plugins</a>
                 <a href="/scheduler" class="{{ 'nav-active' if request.path.startswith('/scheduler') else '' }}">Scheduler</a>
+                <a href="/oauth-accounts" class="{{ 'nav-active' if request.path.startswith('/oauth-accounts') else '' }}">OAuth</a>
                 {% for _nav_item in plugin_nav_items %}
                 <a href="{{ _nav_item.path }}" class="{{ 'nav-active' if request.path.startswith(_nav_item.path) else '' }}">{{ _nav_item.label }}</a>
                 {% endfor %}
