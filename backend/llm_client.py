@@ -530,20 +530,23 @@ class LLMClient:
                     # ChatGPT OAuth: auto-fallback on 429 rate limit
                     if (response.status_code == 429
                             and getattr(self, '_oauth_provider', None) == 'chatgpt-oauth'):
-                        from backend.oauth_refresh import get_token_with_fallback
-                        tried = getattr(self, '_oauth_tried_ids', [])
-                        result = get_token_with_fallback('chatgpt', exclude_ids=tried)
-                        if result:
-                            new_id, new_token = result
-                            self._oauth_account_id = new_id
-                            self.api_key = new_token
-                            self._oauth_tried_ids = tried + [new_id]
-                            headers['Authorization'] = f'Bearer {new_token}'
+                        # Rotate to next proxy port (10531 → 10532 → 10533)
+                        _proxy_ports = [10531, 10532, 10533]
+                        _tried_ports = getattr(self, '_oauth_tried_ports', [])
+                        _current_port = int((self.base_url or '').split(':')[-1].split('/')[0] or 10531)
+                        if _current_port not in _tried_ports:
+                            _tried_ports.append(_current_port)
+                        _next_ports = [p for p in _proxy_ports if p not in _tried_ports]
+                        if _next_ports:
+                            _next_port = _next_ports[0]
+                            self.base_url = f'http://127.0.0.1:{_next_port}/v1'
+                            self._oauth_tried_ports = _tried_ports
+                            url = f'{self.base_url}/chat/completions'
                             import logging as _log
                             _log.getLogger(__name__).info(
-                                'OAuth 429 fallback to account %s', new_id
+                                'OAuth 429 fallback to proxy port %s', _next_port
                             )
-                            continue  # retry with new token
+                            continue  # retry with new proxy
 
                     error_msg = (
                         f"LLM API error: {response.status_code} - {response.text[:200]}"
