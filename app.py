@@ -36,6 +36,7 @@ from routes.logs import logs_bp
 from routes.safety_rules import safety_rules_bp
 from routes.update import update_bp
 from routes.oauth import oauth_bp
+from routes.openai_proxy import openai_proxy_bp
 import config
 from backend.version import get_version
 
@@ -72,6 +73,7 @@ app.register_blueprint(logs_bp)
 app.register_blueprint(safety_rules_bp)
 app.register_blueprint(update_bp)
 app.register_blueprint(oauth_bp)
+app.register_blueprint(openai_proxy_bp)
 
 
 # ---- Backward-compatible redirect: /settings/* → /system/* ----
@@ -341,6 +343,8 @@ def enforce_auth():
     # Always-accessible endpoints (no auth required)
     if request.path == '/api/health':
         return None
+    if request.path.startswith('/proxy/openai/'):
+        return None  # Internal OAuth proxy — auth handled by token rotation
     if request.path.startswith('/api/channels/whatsapp-bridge/'):
         return None  # Baileys sidecar calls this from localhost
     if request.path == '/api/connector/pair':
