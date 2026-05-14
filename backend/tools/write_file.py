@@ -129,6 +129,22 @@ def execute(agent, args: dict) -> dict:
                 },
             }
 
+    # Heuristic safety check: require approval for .env files
+    if not (agent or {}).get('is_super') and (agent is None or agent.get("safety_checker_enabled", 1)):
+        from backend.tools.safety_checker import check_env_path
+        env_check = check_env_path(file_path, agent)
+        if env_check["blocked"]:
+            return {
+                "error": env_check["error"],
+                "level": "requires_approval",
+                "reasons": [env_check["reason"]],
+                "approval_info": {
+                    "risk_level": "high",
+                    "description": "Writing to environment files may expose or corrupt secrets, API keys, or passwords.",
+                    "file_path": file_path,
+                },
+            }
+
     # Normalize booleans in case they arrive as strings from the LLM
     if isinstance(overwrite, str):
         overwrite = overwrite.lower() not in ('false', '0', 'no')
@@ -148,6 +164,34 @@ def execute(agent, args: dict) -> dict:
         if not local_path:
             return {'error': "Access denied — path escapes agent directory."}
         return write_file(local_path, content, overwrite=overwrite, create_dirs=create_dirs)
+
+    # /_portal/ path: route through a virtual path mapping to local/SSH/evonet.
+    from backend.tools._portal import is_portal_path, resolve_portal_path
+    if agent_id and is_portal_path(file_path):
+        backend, real_path = resolve_portal_path(agent_id, file_path)
+        if backend is None:
+            return {'error': real_path}  # error message
+        already_exists = backend.file_exists(real_path)
+        if not overwrite and already_exists:
+            return {
+                'error': (
+                    f"File already exists: {file_path}. "
+                    "Set overwrite=true to replace it."
+                )
+            }
+        parent = real_path.rsplit("/", 1)[0] if "/" in real_path else ""
+        if parent and create_dirs and not backend.file_exists(parent):
+            result = backend.make_dirs(parent)
+            if 'error' in result:
+                return result
+        result = backend.write_file(real_path, content, create_dirs=False)
+        if 'error' in result:
+            return result
+        return {
+            'result': 'success',
+            'bytes_written': len(content.encode('utf-8')),
+            'created': not already_exists,
+        }
 
     # When sandbox is enabled, route file I/O through the execution backend
     # (Docker container, SSH remote, etc.) instead of the host filesystem.

@@ -17,6 +17,7 @@ from models.mixins import (
     DashboardMixin,
     ModelsMixin,
     WorkplaceMixin,
+    PortalMixin,
     SafetyRuleMixin,
     OAuthAccountMixin,
 )
@@ -35,6 +36,7 @@ class Database(
     DashboardMixin,
     ModelsMixin,
     WorkplaceMixin,
+    PortalMixin,
     SafetyRuleMixin,
     OAuthAccountMixin,
 ):
