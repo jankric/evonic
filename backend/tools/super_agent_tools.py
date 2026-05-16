@@ -300,7 +300,7 @@ _TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "assign_skills",
-            "description": "Replace all skill assignments for an agent. Validates agent exists before assigning.",
+            "description": "Add skills to an agent (skips skills already assigned). Does not remove existing assignments. Validates agent exists before assigning.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -769,8 +769,13 @@ def _exec_assign_skills(args: dict) -> dict:
         return {'error': f"Agent '{agent_id}' not found."}
     if not isinstance(skill_ids, list):
         return {'error': 'skill_ids must be a list.'}
-    db.set_agent_skills(agent_id, skill_ids)
-    return {'success': True, 'message': f"Assigned {len(skill_ids)} skill(s) to agent '{agent_id}'."}
+    current_skills = db.get_agent_skills(agent_id)
+    new_skills = [s for s in skill_ids if s not in current_skills]
+    if not new_skills:
+        return {'message': f"All {len(skill_ids)} skill(s) are already assigned to agent '{agent_id}'. No changes made."}
+    merged = current_skills + new_skills
+    db.set_agent_skills(agent_id, merged)
+    return {'success': True, 'message': f"Added {len(new_skills)} new skill(s) to agent '{agent_id}' ({len(skill_ids)} requested, {len(skill_ids) - len(new_skills)} already assigned). Total: {len(merged)} skill(s)."}
 
 
 def _exec_unassign_skill(args: dict) -> dict:
