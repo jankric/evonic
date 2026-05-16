@@ -2,11 +2,104 @@
 
 ## Mandatory: Token Setup (DO THIS FIRST)
 
-You **cannot** use any `gh` command without a valid GitHub token. Before doing anything else, you **must** ensure the token is available. Follow this exact sequence:
+You **cannot** use any `gh` command without `gh` itself being installed and a valid GitHub token. Before doing anything else, follow this exact sequence:
+
+### Step 0: Check if `gh` CLI is installed
+
+Run this command first:
+
+```bash
+gh --version
+```
+
+- If `gh --version` succeeds — proceed to **Step 1**.
+- If the command fails (command not found), **stop immediately** and inform the user:
+
+> The GitHub CLI (`gh`) is not installed on this system. You need it to manage PRs, issues, and other GitHub operations. Would you like me to install it?
+
+If the user agrees, install `gh` using the appropriate method for their system.
+
+### Installation Methods by OS
+
+**Debian / Ubuntu (official repo)**
+
+```bash
+curl -fsSL https://github.com | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+&& sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+sudo apt update
+sudo apt install gh -y
+```
+
+**macOS — Homebrew**
+
+```bash
+brew install gh
+```
+
+**macOS — MacPorts**
+
+```bash
+sudo port install gh
+```
+
+**Arch Linux**
+
+```bash
+sudo pacman -S github-cli
+```
+
+**Fedora / CentOS / RHEL (dnf)**
+
+```bash
+sudo dnf install 'dnf-command(config-manager)'
+sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
+sudo dnf install gh --repo gh-cli
+```
+
+Alternatively, from the community repository:
+
+```bash
+sudo dnf install gh
+# Upgrade
+sudo dnf update gh
+```
+
+**openSUSE / SUSE Linux (zypper)**
+
+```bash
+sudo zypper addrepo https://cli.github.com/packages/rpm/gh-cli.repo
+sudo zypper ref
+sudo zypper install gh
+```
+
+**Build from source (any Linux with Go installed)**
+
+```bash
+go version
+git clone https://github.com/cli/cli.git gh-cli
+cd gh-cli
+# Installs to /usr/local by default; sudo may be required
+make install
+```
+
+**Windows — Build from source**
+
+```powershell
+go run script\build.go
+```
+
+**Verify installation**
+
+```bash
+gh --version
+```
+
+If the user declines, inform them that the GitHub skill cannot be used without `gh` and stop.
 
 ### Step 1: Check if token is already stored
 
-Call `recall()` to search long-term memory:
+After confirming `gh` is installed, call `recall()` to search long-term memory:
 
 ```
 recall(query="GitHub personal access token")
@@ -382,6 +475,7 @@ If near the limit, wait or inform the user.
 
 ## Summary Checklist
 
+0. ✅ `gh --version` confirms `gh` is installed — or installed via apt/brew on user request
 1. ✅ Token retrieved from memory — or user asked and token saved
 2. ✅ `gh auth status` confirms authentication
 3. ✅ `--repo {owner}/{repo}` on every command (or inside cloned repo)
