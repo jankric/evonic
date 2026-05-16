@@ -228,6 +228,13 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
                 </select>
                 <p class="text-xs text-gray-400 mt-1">Select a model configured in Settings &gt; Models. "Use global default" uses whichever model is marked as default.</p>
             </div>
+            <div class="mb-4">
+                <label class="block mb-1 text-gray-600 dark:text-gray-300 text-sm font-medium">Fallback Model</label>
+                <select id="agent-fallback-model-select" class="w-full p-2.5 border border-gray-300 rounded-md text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 dark:bg-gray-700 dark:text-gray-100">
+                    <option value="">-- None (no fallback) --</option>
+                </select>
+                <p class="text-xs text-gray-400 mt-1">If the primary model fails after all retries, the agent will automatically attempt this fallback model. Leave empty to skip fallback.</p>
+            </div>
             <!-- Workplace Selector -->
             <div class="mb-4">
                 <label class="block mb-1 text-gray-600 dark:text-gray-300 text-sm font-medium">Workplace</label>
@@ -1490,10 +1497,11 @@ async function saveGeneral() {
     if (!data.success) { showToast("Failed to save settings.", "error"); return; }
 
     const selectedModelId = document.getElementById('agent-model-select').value || null;
+    const selectedFallbackModelId = document.getElementById('agent-fallback-model-select').value || null;
     await fetch(`/api/agents/${AGENT_ID}/model`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ model_id: selectedModelId })
+        body: JSON.stringify({ model_id: selectedModelId, fallback_model_id: selectedFallbackModelId })
     });
 
     if (workspaceChanged) {
@@ -3366,16 +3374,25 @@ async function loadAgentModelSelector() {
         const modelsData = await modelsRes.json();
         const agentModelData = await agentModelRes.json();
         const currentModelId = agentModelData.default_model_id || '';
+        const currentFallbackModelId = agentModelData.fallback_model_id || '';
 
         const sel = document.getElementById('agent-model-select');
+        const fbSel = document.getElementById('agent-fallback-model-select');
         (modelsData.models || []).forEach(m => {
             const opt = document.createElement('option');
             opt.value = m.id;
             opt.textContent = `${m.name} (${m.model_name})`;
             if (m.id === currentModelId) opt.selected = true;
             sel.appendChild(opt);
+
+            const fbOpt = document.createElement('option');
+            fbOpt.value = m.id;
+            fbOpt.textContent = `${m.name} (${m.model_name})`;
+            if (m.id === currentFallbackModelId) fbOpt.selected = true;
+            fbSel.appendChild(fbOpt);
         });
         if (!currentModelId) sel.value = '';
+        if (!currentFallbackModelId) fbSel.value = '';
     } catch (err) {
         console.error('[ModelSelector] Failed to load:', err);
     }

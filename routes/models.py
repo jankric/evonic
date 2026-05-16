@@ -262,7 +262,7 @@ def api_test_model(model_id):
 
 @models_bp.route("/api/agents/<agent_id>/model", methods=["GET"])
 def api_get_agent_model(agent_id):
-    """Get agent's default model."""
+    """Get agent's default model and fallback model."""
     agent = db.get_agent(agent_id)
     if not agent:
         return jsonify({"error": "Agent not found"}), 404
@@ -270,27 +270,41 @@ def api_get_agent_model(agent_id):
     model = db.get_agent_default_model(agent_id)
     if model:
         _sanitize_model(model)
+    fallback_model = db.get_agent_fallback_model(agent_id)
+    if fallback_model:
+        _sanitize_model(fallback_model)
     return jsonify(
         {
             "agent_id": agent_id,
             "default_model_id": agent.get("default_model_id"),
             "model": model,
+            "fallback_model_id": agent.get("fallback_model_id"),
+            "fallback_model": fallback_model,
         }
     )
 
 
 @models_bp.route("/api/agents/<agent_id>/model", methods=["POST"])
 def api_set_agent_model(agent_id):
-    """Set agent's default model."""
+    """Set agent's default model and/or fallback model."""
     agent = db.get_agent(agent_id)
     if not agent:
         return jsonify({"error": "Agent not found"}), 404
 
     data = request.get_json()
     model_id = data.get("model_id") if data else None
+    fallback_model_id = data.get("fallback_model_id") if data else None
 
+    # Set primary model (None means "clear" → use global default)
     success = db.set_agent_default_model(agent_id, model_id)
-    if not success:
-        return jsonify({"success": False, "error": "Failed to set model"}), 400
+    if not success and model_id:
+        return jsonify({"success": False, "error": "Failed to set primary model"}), 400
+
+    # Set fallback model (None means "clear" → no fallback)
+    # Only set if explicitly provided (even if None)
+    if "fallback_model_id" in (data or {}):
+        fb_success = db.set_agent_fallback_model(agent_id, fallback_model_id)
+        if not fb_success and fallback_model_id:
+            return jsonify({"success": False, "error": "Failed to set fallback model"}), 400
 
     return jsonify({"success": True})

@@ -427,6 +427,12 @@ class SchemaMixin:
             except sqlite3.OperationalError:
                 pass
 
+            # Migration: add fallback_model_id for per-agent model fallback
+            try:
+                cursor.execute("ALTER TABLE agents ADD COLUMN fallback_model_id TEXT")
+            except sqlite3.OperationalError:
+                pass
+
             # Migration: enable inject_agent_id and inject_datetime for all existing agents
             cursor.execute("UPDATE agents SET inject_agent_id = 1 WHERE inject_agent_id = 0 OR inject_agent_id IS NULL")
             cursor.execute("UPDATE agents SET inject_datetime = 1 WHERE inject_datetime = 0 OR inject_datetime IS NULL")

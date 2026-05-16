@@ -503,14 +503,79 @@ def run_tool_loop(agent: Dict[str, Any],
                     continue
                 # Compaction failed — fall through to error
 
-            error_msg = _humanize_llm_error(error_detail)
-            _err_dur = round(time.time() - _loop_start_time, 1)
-            db.add_chat_message(session_id, 'assistant', error_msg, agent_id=db_agent_id,
-                                metadata={"error": True, "timeline": timeline, "thinking_duration": _err_dur})
-            chatlog.append({'type': 'error', 'session_id': session_id, 'content': error_msg,
-                            'metadata': {'error': True, 'thinking_duration': _err_dur}})
-            chatlog.append({'type': 'turn_end', 'session_id': session_id, 'thinking_duration': _err_dur})
-            return {"text": error_msg, "error": True}, tool_trace, timeline
+            # ── Per-agent model fallback ──────────────────────────────────
+            # After all retries to the primary model fail, attempt the
+            # agent's configured fallback model (if any) before giving up.
+            _fallback_succeeded = False
+            _fallback_model = db.get_agent_fallback_model(agent_id)
+            if _fallback_model:
+                _logger.warning(
+                    "Primary model failed [%s] for agent %s — attempting fallback model %s (%s)",
+                    error_type, agent_id, _fallback_model.get('name'), _fallback_model.get('model_name'))
+                event_stream.emit('llm_fallback', {
+                    'agent_id': agent_id, 'session_id': session_id,
+                    'external_user_id': external_user_id, 'channel_id': channel_id,
+                    'primary_error': error_type,
+                    'fallback_model': _fallback_model.get('name'),
+                })
+                try:
+                    _fallback_config = {
+                        'base_url': _fallback_model.get('base_url'),
+                        'api_key': _fallback_model.get('api_key'),
+                        'model_name': _fallback_model.get('model_name'),
+                        'timeout': _fallback_model.get('timeout', 60),
+                        'thinking': bool(_fallback_model.get('thinking', False)),
+                        'thinking_budget': _fallback_model.get('thinking_budget', 0),
+                        'max_tokens': _fallback_model.get('max_tokens', 32768),
+                        'temperature': _fallback_model.get('temperature'),
+                    }
+                    _fallback_llm = LLMClient(model_config=_fallback_config)
+                    with llm_lock:
+                        _fallback_result = _fallback_llm.chat_completion(
+                            messages=messages,
+                            tools=tools if tools else None,
+                            temperature=None,
+                            enable_thinking=_enable_thinking_this_call,
+                            max_tokens=None,
+                            log_file=llm_log_path
+                        )
+                    if _fallback_result.get('success'):
+                        _logger.info(
+                            "Fallback model %s succeeded for agent %s — using for remaining iterations",
+                            _fallback_model.get('model_name'), agent_id)
+                        event_stream.emit('llm_fallback_succeeded', {
+                            'agent_id': agent_id, 'session_id': session_id,
+                            'external_user_id': external_user_id, 'channel_id': channel_id,
+                            'fallback_model': _fallback_model.get('name'),
+                        })
+                        llm = _fallback_llm
+                        result = _fallback_result
+                        _fallback_succeeded = True
+                    else:
+                        _fb_err = _fallback_result.get('error_type', 'unknown')
+                        _logger.error(
+                            "Fallback model %s also failed for agent %s [%s]: %s",
+                            _fallback_model.get('model_name'), agent_id, _fb_err,
+                            _fallback_result.get('error_detail', ''))
+                        event_stream.emit('llm_fallback_failed', {
+                            'agent_id': agent_id, 'session_id': session_id,
+                            'external_user_id': external_user_id, 'channel_id': channel_id,
+                            'fallback_model': _fallback_model.get('name'),
+                            'fallback_error': _fb_err,
+                        })
+                except Exception as _fe:
+                    _logger.error(
+                        "Fallback model exception for agent %s: %s", agent_id, _fe)
+
+            if not _fallback_succeeded:
+                error_msg = _humanize_llm_error(error_detail)
+                _err_dur = round(time.time() - _loop_start_time, 1)
+                db.add_chat_message(session_id, 'assistant', error_msg, agent_id=db_agent_id,
+                                    metadata={"error": True, "timeline": timeline, "thinking_duration": _err_dur})
+                chatlog.append({'type': 'error', 'session_id': session_id, 'content': error_msg,
+                                'metadata': {'error': True, 'thinking_duration': _err_dur}})
+                chatlog.append({'type': 'turn_end', 'session_id': session_id, 'thinking_duration': _err_dur})
+                return {"text": error_msg, "error": True}, tool_trace, timeline
 
         choice = result['response'].get('choices', [{}])[0]
         msg = choice.get('message', {})

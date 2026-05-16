@@ -109,6 +109,40 @@ class ModelsMixin:
             conn.commit()
             return cursor.rowcount > 0
 
+    def get_agent_fallback_model(self, agent_id: str) -> Optional[Dict[str, Any]]:
+        """Return agent's fallback model or None.
+
+        Unlike get_agent_default_model, there is no global fallback —
+        if the agent has no fallback configured, returns None.
+        """
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT fallback_model_id FROM agents WHERE id = ?", (agent_id,))
+            row = cursor.fetchone()
+            if row and row["fallback_model_id"]:
+                cursor.execute("SELECT * FROM llm_models WHERE id = ?", (row["fallback_model_id"],))
+                model_row = cursor.fetchone()
+                if model_row:
+                    return dict(model_row)
+            return None
+
+    def set_agent_fallback_model(self, agent_id: str, model_id: Optional[str]) -> bool:
+        """Set agent's fallback model. model_id can be None to clear."""
+        with self._connect() as conn:
+            cursor = conn.cursor()
+            if model_id:
+                # Verify model exists
+                cursor.execute("SELECT 1 FROM llm_models WHERE id = ?", (model_id,))
+                if not cursor.fetchone():
+                    return False
+            cursor.execute(
+                "UPDATE agents SET fallback_model_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (model_id, agent_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
     def create_model(self, model_data: Dict[str, Any]) -> str:
         """Create a new model. Returns model ID."""
         import uuid
