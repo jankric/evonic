@@ -1372,6 +1372,61 @@ def api_agent_busy(agent_id):
     return jsonify(result)
 
 
+@agents_bp.route('/api/agents/status/stream', methods=['GET'])
+def api_agents_status_stream():
+    """SSE endpoint — pushes real-time agent busy/idle status changes.
+
+    Subscribes to the 'agent_busy_changed' event (emitted by AgentRuntime
+    when an agent starts or finishes an LLM turn) and forwards changes as
+    SSE events to every connected client.  No session filtering — the
+    browser-side JS decides which agent card to update.
+
+    Events:
+        event: agent_busy_changed
+        data: {"agent_id": "...", "busy": true|false, "session_id": "..."}
+    """
+    import queue as _queue
+    from backend.event_stream import event_stream
+
+    q = _queue.Queue(maxsize=200)
+
+    def handler(data):
+        try:
+            payload = {
+                'agent_id': data.get('agent_id', ''),
+                'busy': data.get('busy', False),
+                'session_id': data.get('session_id', ''),
+            }
+            q.put_nowait(payload)
+        except _queue.Full:
+            pass
+
+    event_stream.on('agent_busy_changed', handler)
+
+    def generate():
+        try:
+            while True:
+                try:
+                    payload = q.get(timeout=30)
+                except _queue.Empty:
+                    # Heartbeat to keep the connection alive through proxies
+                    yield ': heartbeat\n\n'
+                    continue
+                yield f'event: agent_busy_changed\ndata: {json.dumps(payload)}\n\n'
+        finally:
+            event_stream.off('agent_busy_changed', handler)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        }
+    )
+
+
 # ==================== Portal API ====================
 
 

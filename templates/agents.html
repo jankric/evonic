@@ -269,7 +269,8 @@ async function loadBusyAgents() {
         const data = await res.json();
         busyAgents = {};
         for (const id of Object.keys(data.busy || {})) busyAgents[id] = true;
-        renderAgents();
+        // Apply initial busy state to already-rendered cards
+        for (const id of Object.keys(busyAgents)) updateAgentBusyBadge(id, true);
     } catch (e) { /* ignore */ }
 }
 
@@ -280,7 +281,7 @@ async function loadAgents() {
     renderAgents();
     loadSkillsets();
     loadBusyAgents();
-    setInterval(loadBusyAgents, 5000);
+    startAgentStatusStream();
 }
 
 function renderAgents() {
@@ -338,7 +339,7 @@ function renderAgents() {
                     Off
                </span>`;
         const busyBadge = busyAgents[a.id]
-            ? `<span class="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-full">
+            ? `<span class="busy-badge inline-flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-full">
                     <span class="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
                     Busy
                </span>`
@@ -348,12 +349,12 @@ function renderAgents() {
                 </a>`;
         const avatarUrl = `/api/agents/${a.id}/avatar`;
         return `
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-shadow overflow-hidden">
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-shadow overflow-hidden" data-agent-id="${esc(a.id)}">
             <div class="p-3">
                 <div class="flex items-start gap-2">
                     <img src="${avatarUrl}" alt="${esc(a.name || a.id)}" class="w-8 h-8 rounded-full object-cover flex-shrink-0 bg-indigo-50 dark:bg-indigo-900/20" onerror="this.onerror=null;this.style.display='none'">
                     <div class="flex-1 min-w-0 cursor-pointer" onclick="window.location.href='/agents/${a.id}'">
-                        <div class="flex items-center gap-2 flex-wrap">
+                        <div class="flex items-center gap-2 flex-wrap" data-badges="${esc(a.id)}">
                             <h3 class="font-semibold text-sm ${a.is_super ? 'text-red-600 dark:text-red-400' : 'text-gray-800 dark:text-gray-100'} truncate">${esc(a.name || a.id)}${superBadge}</h3>
                             ${statusBadge}
                             ${busyBadge}
@@ -380,6 +381,69 @@ function renderAgents() {
         disabledCount.textContent = `(${disabledAgents.length})`;
         disabledGrid.innerHTML = disabledAgents.map(a => renderCard(a)).join('');
     }
+}
+
+function updateAgentBusyBadge(agentId, busy) {
+    const card = document.querySelector(`[data-agent-id="${agentId}"]`);
+    if (!card) return; // card not in DOM (e.g. filtered out by search)
+    const badges = card.querySelector(`[data-badges="${agentId}"]`);
+    if (!badges) return;
+    const existing = badges.querySelector('.busy-badge');
+    if (busy) {
+        if (!existing) {
+            const span = document.createElement('span');
+            span.className = 'busy-badge inline-flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-full';
+            span.innerHTML = '<span class="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span> Busy';
+            badges.appendChild(span);
+        }
+    } else {
+        if (existing) existing.remove();
+    }
+}
+
+function startAgentStatusStream() {
+    const url = `/api/agents/status/stream`;
+
+    function connect() {
+        const es = new EventSource(url);
+        es.addEventListener('agent_busy_changed', function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                const agentId = data.agent_id;
+                if (!agentId) return;
+                if (data.busy) {
+                    busyAgents[agentId] = true;
+                } else {
+                    delete busyAgents[agentId];
+                }
+                updateAgentBusyBadge(agentId, data.busy);
+            } catch (_) {}
+        });
+        es.addEventListener('error', function() {
+            es.close();
+            // Reconnect after a short delay
+            setTimeout(function() {
+                // Re-fetch full busy state before reconnecting
+                fetch('/api/agents/busy').then(r => r.json()).then(data => {
+                    busyAgents = {};
+                    for (const id of Object.keys(data.busy || {})) busyAgents[id] = true;
+                    for (const id of Object.keys(busyAgents)) updateAgentBusyBadge(id, true);
+                    // Clear stale badges for agents not in busy list
+                    document.querySelectorAll('.busy-badge').forEach(function(b) {
+                        const parent = b.closest('[data-badges]');
+                        if (parent) {
+                            const agentId = parent.getAttribute('data-badges');
+                            if (!busyAgents[agentId]) b.remove();
+                        }
+                    });
+                }).catch(function() {}).finally(function() {
+                    connect();
+                });
+            }, 2000);
+        });
+    }
+
+    connect();
 }
 
 function toggleDisabledAgents() {
