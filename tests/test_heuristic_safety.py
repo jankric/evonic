@@ -105,7 +105,7 @@ def test_safe_bash_code():
 def test_dangerous_bash_code():
     """Test that dangerous Bash code is flagged as dangerous."""
     tests = [
-        ("docker ps", "dangerous"),
+        ("docker ps", "warning"),
         ("reverse shell", "dangerous"),
     ]
     
@@ -221,10 +221,10 @@ def test_score_ranges():
     assert result['level'] == 'requires_approval'
     assert 8 <= result['score'] <= 14
     
-    # Dangerous: 15+
+    # Warning: 4-7 (docker is now warning, not dangerous, because sandbox is isolated)
     result = check_safety("docker ps", tool_type='bash')
-    assert result['level'] == 'dangerous'
-    assert result['score'] >= 15
+    assert result['level'] == 'warning'
+    assert 4 <= result['score'] <= 7
     
     print("✅ test_score_ranges passed")
 
@@ -424,7 +424,7 @@ def test_approval_info_git_staging():
 def test_approval_info_sandbox_escape():
     """Test that approval_info has correct risk_level and category for sandbox escape."""
     result = check_safety("docker ps", tool_type='bash')
-    assert result['level'] == 'dangerous', f"Expected dangerous for docker ps, got '{result['level']}' (score={result['score']})"
+    assert result['level'] == 'warning', f"Expected warning for docker ps, got '{result['level']}' (score={result['score']})"
     assert result['requires_approval'] == False
     assert result['approval_info'] is None
     assert 'sandbox_escape' in result['blocked_patterns'], f"Expected sandbox_escape in blocked_patterns, got {result['blocked_patterns']}"
