@@ -89,6 +89,11 @@ from backend.plugin_manager import plugin_manager
 for plugin_id, bp in plugin_manager.get_blueprints().items():
     app.register_blueprint(bp)
 
+# Register injection guard for tool-level prompt injection detection
+from backend.tools.injection_guard import injection_tool_guard
+from backend.plugin_hooks import register_tool_guard
+register_tool_guard(injection_tool_guard)
+
 # Display plugin and skill loading summary on startup
 loaded_plugins = [p['id'] for p in plugin_manager.list_plugins() if plugin_manager._is_plugin_enabled(p['id'])]
 loaded_skills = []
