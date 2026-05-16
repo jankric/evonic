@@ -114,9 +114,33 @@ class ToolRegistry:
                     fn_to_skill[parts[2]] = parts[1]
 
         def real_executor(function_name: str, arguments: dict) -> dict:
+            # Authorization guard: tool must be in assigned_tool_ids
+            _assigned = set(ctx.get('assigned_tool_ids', []))
+            if function_name not in _assigned:
+                # Also check namespaced IDs like skill:skill_id:fn_name
+                _namespaced_match = any(
+                    tid.endswith(f':{function_name}')
+                    for tid in _assigned
+                )
+                if not _namespaced_match:
+                    return {
+                        "error": (
+                            f"Tool '{function_name}' is not assigned to this agent. "
+                            "Only explicitly assigned tools can be used."
+                        ),
+                        "blocked_by": "authorization",
+                    }
+
             # Agent state guard: block write tools when in plan mode or state-blocked
+            # Exception: /_self/ paths are always allowed (agent's own config dir).
+            from backend.tools._workspace import is_self_path
+            _self_path_args = {'write_file', 'str_replace', 'patch', 'file_edit', 'file_create'}
+            _is_self_target = (
+                function_name in _self_path_args
+                and any(is_self_path(str(v)) for v in arguments.values())
+            )
             ms = ctx.get('agent_state')
-            if ms:
+            if ms and not _is_self_target:
                 blocked = ms.is_blocked(function_name)
                 if blocked is True:
                     return {
@@ -370,15 +394,16 @@ def _builtin_use_skill_factory(agent_context: dict):
             "name": "use_skill",
             "description": (
                 "Lazy-load a skill's SYSTEM.md knowledge into the agent context. "
+                "Only works for lazy-loaded skills (eager skills' tools are already available). "
                 "Use this when you need to understand a skill's capabilities before using it. "
-                "Example: use_skill({id: 'hello_world'})"
+                "Example: use_skill({id: 'kanban'})"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "id": {
                         "type": "string",
-                        "description": "The ID of the skill to load (e.g. 'hello_world')."
+                        "description": "The ID of the skill to load (e.g. 'kanban'). Only lazy-loaded skills are supported."
                     }
                 },
                 "required": ["id"]
@@ -401,6 +426,7 @@ def _builtin_unload_skill_factory(agent_context: dict):
             "name": "unload_skill",
             "description": (
                 "Unload a previously lazy-loaded skill, removing its tools from the current context. "
+                "Only works for lazy-loaded skills — eager skills' tools are always available. "
                 "Use this after you are done with a skill to keep the context clean. "
                 "Example: unload_skill({id: 'plugin_creator'})"
             ),
@@ -409,7 +435,7 @@ def _builtin_unload_skill_factory(agent_context: dict):
                 "properties": {
                     "id": {
                         "type": "string",
-                        "description": "The ID of the skill to unload (e.g. 'plugin_creator')."
+                        "description": "The ID of the skill to unload (e.g. 'plugin_creator'). Only lazy-loaded skills can be unloaded."
                     }
                 },
                 "required": ["id"]

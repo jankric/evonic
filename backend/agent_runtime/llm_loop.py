@@ -39,6 +39,32 @@ from backend.agent_runtime.llm_tool_executor import MAX_INJECTIONS_PER_LOOP
 
 from models.db import db
 from backend.llm_client import llm_client, strip_thinking_tags, LLMClient, _split_trailing_think_close
+def _persist_agent_state_split(ms, agent_id, session_id, db_agent_id=None):
+    """Persist agent state, splitting per-session vs global fields.
+
+    - focus/focus_reason are GLOBAL  -> upsert_agent_state(__agent__)
+    - mode/tasks/plan_file/states/auto_trivial are PER-SESSION -> upsert_session_state(session_id)
+    """
+    raw = ms.serialize()
+    data = json.loads(raw)
+
+    # Global: focus/focus_reason
+    global_data = {
+        'focus': data.get('focus', False),
+        'focus_reason': data.get('focus_reason'),
+    }
+    db.upsert_agent_state(json.dumps(global_data), agent_id=agent_id)
+
+    # Per-session: everything except focus/focus_reason
+    session_data = {
+        'mode': data.get('mode', 'plan'),
+        'tasks': data.get('tasks', []),
+        'next_task_id': data.get('next_task_id', 1),
+        'plan_file': data.get('plan_file'),
+        'states': data.get('states', {}),
+        'auto_trivial': data.get('auto_trivial', False),
+    }
+    db.upsert_session_state(session_id, json.dumps(session_data), agent_id=agent_id)
 from backend.tools import tool_registry
 from config import (AGENT_MAX_TOOL_ITERATIONS as MAX_TOOL_ITERATIONS,
                     AGENT_MAX_TOOL_RESULT_CHARS as MAX_TOOL_RESULT_CHARS,
@@ -130,6 +156,16 @@ def run_tool_loop(agent: Dict[str, Any],
             if fn and fn not in _existing_fns:
                 tools.append(td)
                 _existing_fns.add(fn)
+
+    # Add restored skill tool IDs to assigned_tool_ids for authorization guard
+    _assigned = agent_context.get('assigned_tool_ids')
+    if _assigned is not None:
+        for sk_id, fns in _loaded_lazy_skills.items():
+            for fn in fns:
+                if fn:
+                    _tid = f'skill:{sk_id}:{fn}'
+                    if _tid not in _assigned:
+                        _assigned.append(_tid)
 
     # Resolve agent's default model for LLM calls
     agent_model_config = None
@@ -252,7 +288,10 @@ def run_tool_loop(agent: Dict[str, Any],
                 _injection_count += 1
                 if _injection_count <= MAX_INJECTIONS_PER_LOOP:
                     _iteration = 0
-                    _had_tool_call_iteration = False  # fresh reasoning context after injection
+                    # Do NOT reset _had_tool_call_iteration here. If prior iterations already
+                    # used thinking + tool calls, the message list contains reasoning_content.
+                    # Re-enabling thinking at this point causes DeepSeek-R1 to reject with
+                    # "reasoning_content must be passed back".
                 else:
                     _logger.warning("Injection cap reached (%d), iteration counter will no longer reset — loop will terminate at max_tool_iterations (%d).", MAX_INJECTIONS_PER_LOOP, max_tool_iterations)
                 _logger.debug("Injected %d user message(s) into loop for session %s (injection #%d)",
@@ -580,6 +619,7 @@ def run_tool_loop(agent: Dict[str, Any],
             # Detect continuation phrases: LLM said it will continue but produced no tool calls.
             # Nudge it to keep going; nudge is NOT saved to DB/history.
             elif content and CONTINUATION_RE.search(content) and _continuation_nudge_count < MAX_CONTINUATION_NUDGES:
+
                 _continuation_nudge_count += 1
                 if PLANNING_RE.search(content):
                     _logger.debug("Nudge negated by PLANNING_RE (%d/%d)",
@@ -641,7 +681,7 @@ def run_tool_loop(agent: Dict[str, Any],
             # Persist mental state for next turn
             ms = agent_context.get('agent_state')
             if ms is not None:
-                db.upsert_agent_state(ms.serialize(), agent_id=agent_id)
+                _persist_agent_state_split(ms, agent_id, session_id, db_agent_id)
             final = content or "(No response)"
             event_stream.emit('final_answer', {
                 'agent_id': agent_id, 'session_id': session_id,
@@ -1008,6 +1048,13 @@ def run_tool_loop(agent: Dict[str, Any],
                     session_skill_tools.setdefault(session_id, {})[loaded_sid] = [
                         t for t in tools if t.get('function', {}).get('name', '') in set(injected_fns)
                     ]
+                # Add injected tool IDs to assigned_tool_ids for authorization guard
+                _assigned = agent_context.get('assigned_tool_ids')
+                if _assigned is not None and loaded_sid:
+                    for fn in injected_fns:
+                        _tid = f'skill:{loaded_sid}:{fn}'
+                        if _tid not in _assigned:
+                            _assigned.append(_tid)
 
             # Persistent skill context: capture system_md for re-injection each iteration
             if fn_name == 'use_skill' and isinstance(tool_result, dict) and tool_result.get('system_md'):
@@ -1023,6 +1070,13 @@ def run_tool_loop(agent: Dict[str, Any],
                     fns_to_remove = set(_loaded_lazy_skills.pop(unload_sid))
                     tools[:] = [t for t in tools if t.get('function', {}).get('name', '') not in fns_to_remove]
                     session_skill_tools.get(session_id, {}).pop(unload_sid, None)
+                # Remove unloaded tool IDs from assigned_tool_ids
+                _assigned = agent_context.get('assigned_tool_ids')
+                if _assigned is not None and unload_sid:
+                    for fn in fns_to_remove:
+                        _tid = f'skill:{unload_sid}:{fn}'
+                        if _tid in _assigned:
+                            _assigned.remove(_tid)
 
             # Persistent skill context: clear system_md when skill is unloaded
             if fn_name == 'unload_skill' and isinstance(tool_result, dict):
@@ -1079,7 +1133,7 @@ def run_tool_loop(agent: Dict[str, Any],
             if fn_name in ('save_plan', 'set_mode', 'update_tasks', 'state'):
                 _ms = agent_context.get('agent_state')
                 if _ms is not None:
-                    db.upsert_agent_state(_ms.serialize(), agent_id=agent_id)
+                    _persist_agent_state_split(_ms, agent_id, session_id, db_agent_id)
 
             # Record in trace (for animated bubbles)
             tool_trace.append({"tool": fn_name, "args": args, "result": result_dict})

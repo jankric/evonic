@@ -98,6 +98,12 @@ class ChatDelegationMixin:
     def get_agent_state(self, agent_id: str) -> str | None:
         return self._chat_db(agent_id).get_agent_state()
 
+    def upsert_session_state(self, session_id: str, content: str, agent_id: str):
+        self._chat_db(agent_id).upsert_session_state(session_id, content)
+
+    def get_session_state(self, session_id: str, agent_id: str) -> str | None:
+        return self._chat_db(agent_id).get_session_state(session_id)
+
     def clear_session(self, session_id: str, agent_id: str = None):
         agent_id = agent_id or self._find_agent_for_session(session_id)
         if agent_id:
@@ -162,6 +168,16 @@ class ChatDelegationMixin:
             except FileNotFoundError:
                 pass
             self._refresh_session_count(agent_id)
+            # Wipe attachments tied to this session (rows + on-disk files) so
+            # they don't linger unreachable after the conversation is gone.
+            try:
+                self.delete_session_attachments(session_id, agent_id)
+            except (sqlite3.Error, OSError, ValueError) as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Failed to clear attachments for session %s: %s",
+                    session_id, e,
+                )
         return result
 
     def get_first_agent_request_metadata(self, session_id: str, agent_id: str = None) -> dict | None:
@@ -201,6 +217,16 @@ class ChatDelegationMixin:
 
     def get_latest_human_session(self, agent_id: str) -> Optional[Dict[str, Any]]:
         return self._chat_db(agent_id).get_latest_human_session(agent_id)
+
+    def get_web_fallback_session(self, agent_id: str,
+                                  exclude_session_id: str = None) -> Optional[Dict[str, Any]]:
+        """Return the most recent web session (no channel) for a human user.
+
+        Delegates to the per-agent chat DB so escalate_to_user can deliver
+        messages to the web UI as a secondary target.
+        """
+        return self._chat_db(agent_id).get_web_fallback_session(
+            agent_id, exclude_session_id=exclude_session_id)
 
     def get_session_with_details(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Find session across all agent DBs and enrich with agent/channel info."""
@@ -341,11 +367,26 @@ class ChatDelegationMixin:
         return None
 
     def clear_all_sessions(self):
-        """Drop all chat sessions, messages, and summaries across all agents."""
+        """Drop all chat sessions, messages, and summaries across all agents.
+
+        Also removes every stored attachment (rows + on-disk files) since they
+        are no longer reachable once the sessions referencing them are gone.
+        """
         agents = self.get_agents()
         for agent in agents:
             chat_db = self._chat_db(agent['id'])
             chat_db.clear_all()
+        # Wipe attachments after sessions to keep storage in sync with the
+        # newly-cleared chat history.
+        try:
+            self.delete_all_attachments()
+        except (sqlite3.Error, OSError) as e:
+            # Logged inside delete_all_attachments for per-file errors; this
+            # catches DB-level issues without breaking the session clear.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to clear attachments during clear_all_sessions: %s", e
+            )
 
     # ---- Long-term Memory delegation ----
 

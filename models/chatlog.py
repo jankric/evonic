@@ -343,7 +343,9 @@ class ChatLog:
         - Each subsequent tool_output becomes a {role: "tool"} message.
 
         after_ts: if set, only include entries with ts > after_ts (for summary tail).
-        limit: max number of entries to consider (applied before grouping).
+        limit: max number of semantic messages (user/final/intermediate) to consider.
+              Mechanical entries (thinking/tool_call/tool_output) between them are
+              always included so tool-heavy turns don't inflate the count.
         """
         raw_entries: List[dict] = []
 
@@ -358,16 +360,23 @@ class ChatLog:
                 if entry.get('type') in _LLM_CONTEXT_TYPES:
                     raw_entries.append(entry)
         else:
-            # Read last `limit` conversation entries (tail scan)
+            # Read last `limit` semantic messages (tail scan).
+            # Count only semantic entries (user, final, intermediate) toward
+            # the limit — these represent actual conversation turns.  Mechanical
+            # entries (thinking, tool_call, tool_output) between them are always
+            # collected so tool-heavy turns don't inflate the count.
             collected = []
+            semantic_count = 0
             for raw in self._iter_lines_reverse():
                 entry = self._parse(raw)
                 if entry is None:
                     continue
                 if entry.get('type') in _LLM_CONTEXT_TYPES:
                     collected.append(entry)
-                    if len(collected) >= limit:
-                        break
+                    if entry.get('type') in _SUMMARY_COUNT_TYPES:
+                        semantic_count += 1
+                        if semantic_count >= limit:
+                            break
             collected.reverse()
             raw_entries = collected
 
@@ -429,6 +438,17 @@ def _fix_interleaved_user_messages(msgs: List[Dict[str, Any]]) -> List[Dict[str,
                     break
                 if found_ids == tc_ids:
                     break  # All expected tool responses collected
+            # If some tool responses are missing (agent interrupted before recording
+            # outputs, or history limit cut them off), inject synthetic error
+            # responses so the API contract is satisfied: every tool_call_id in the
+            # assistant message must have a corresponding tool response.
+            missing_ids = tc_ids - found_ids
+            for mid in missing_ids:
+                tool_responses.append({
+                    'role': 'tool',
+                    'tool_call_id': mid,
+                    'content': '{"error": "Tool execution was interrupted before completion."}',
+                })
             result.append(msg)
             result.extend(tool_responses)
             result.extend(deferred)
@@ -564,7 +584,34 @@ def _reconstruct_llm_messages(entries: List[dict]) -> List[Dict[str, Any]]:
             # Skip turn_begin, turn_end, pending
             i += 1
 
-    return _fix_interleaved_user_messages(messages)
+    return _drop_orphaned_tool_messages(
+        _fix_interleaved_user_messages(messages))
+
+
+def _drop_orphaned_tool_messages(msgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Remove tool messages whose tool_call_id has no preceding assistant(tool_calls).
+
+    This can happen when the summary watermark timestamp ties with a tool_call
+    entry — the forward scan excludes the tool_call (ts <= watermark) but
+    includes its tool_output (later ts), producing an orphaned tool message
+    that the LLM API rejects.  Also drops duplicate tool responses for the
+    same tool_call_id (can occur when synthetic placeholders were injected
+    and the real response appears later).
+    """
+    declared_ids: set = set()
+    responded_ids: set = set()
+    result: List[Dict[str, Any]] = []
+    for msg in msgs:
+        if msg.get('tool_calls'):
+            for tc in msg['tool_calls']:
+                declared_ids.add(tc['id'])
+        if msg.get('role') == 'tool':
+            tcid = msg.get('tool_call_id', '')
+            if tcid not in declared_ids or tcid in responded_ids:
+                continue  # orphaned or duplicate — skip
+            responded_ids.add(tcid)
+        result.append(msg)
+    return result
 
 
 # ------------------------------------------------------------------

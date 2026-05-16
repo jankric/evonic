@@ -171,6 +171,12 @@ def api_create_agent():
         return jsonify({'error': 'Invalid ID. Use only lowercase alphanumeric characters and underscores (snake_case).'}), 400
     if db.get_agent(agent_id):
         return jsonify({'error': 'Agent ID already exists.'}), 400
+    if len(data.get('name', '')) > 200:
+        return jsonify({'error': 'Name too long (max 200 characters).'}), 400
+    if len(data.get('description', '')) > 2000:
+        return jsonify({'error': 'Description too long (max 2000 characters).'}), 400
+    if len(data.get('system_prompt', '')) > 102400:
+        return jsonify({'error': 'System prompt too long (max 100 KB).'}), 400
     # Docker Sandbox only available for local workplace mode
     if data.get('sandbox_enabled') and data.get('workplace_id'):
         workplace = db.get_workplace(data['workplace_id'])
@@ -734,11 +740,17 @@ def api_whatsapp_bridge_status(agent_id, channel_id):
 @agents_bp.route('/api/channels/whatsapp-bridge/<channel_id>/callback', methods=['POST'])
 def api_whatsapp_callback(channel_id):
     """Receive incoming WhatsApp messages from the Baileys sidecar."""
+    import hmac
     from backend.channels.registry import channel_manager
     import threading
     instance = channel_manager.get_channel_instance(channel_id)
     if not instance or instance.get_channel_type() != 'whatsapp':
         return jsonify({'error': 'Channel not found'}), 404
+    # Validate Bearer token set by the sidecar at startup
+    auth_header = request.headers.get('Authorization', '')
+    expected = f'Bearer {instance._callback_secret}'
+    if not hmac.compare_digest(auth_header, expected):
+        return jsonify({'error': 'Unauthorized'}), 401
     payload = request.get_json(silent=True) or {}
     threading.Thread(target=instance.handle_callback, args=(payload,), daemon=True).start()
     return jsonify({'ok': True})
@@ -935,10 +947,29 @@ def api_chat_summary(agent_id):
 
 @agents_bp.route('/api/agents/<agent_id>/chat/state', methods=['GET'])
 def api_chat_agent_state(agent_id):
+    """Return merged agent state (global + per-session fields).
+
+    Global fields (focus, focus_reason) come from agent_state.
+    Per-session fields (mode, tasks, plan_file, states, auto_trivial) come from
+    session_state when ?session_id= is passed — matching how _restore_agent_state
+    and _persist_agent_state_split work in the runtime.
+    """
     from backend.agent_state import AgentState
-    content = db.get_agent_state(agent_id=agent_id)
-    if content:
-        state = AgentState.deserialize(content)
+    import json as _json
+
+    agent_content = db.get_agent_state(agent_id=agent_id)
+    agent_data = _json.loads(agent_content) if agent_content else {}
+
+    session_id = request.args.get('session_id', '').strip()
+    if session_id:
+        session_content = db.get_session_state(session_id, agent_id=agent_id)
+        session_data = _json.loads(session_content) if session_content else {}
+        merged = {**agent_data, **session_data}
+    else:
+        merged = agent_data
+
+    if merged:
+        state = AgentState.deserialize(_json.dumps(merged))
         return jsonify({
             'mode': state.mode,
             'tasks': state.tasks,

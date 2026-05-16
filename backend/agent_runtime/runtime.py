@@ -9,6 +9,7 @@ llm_loop, and summarizer.
 import logging
 import os
 import signal
+import sys
 import time
 import queue
 import threading
@@ -449,13 +450,15 @@ class AgentRuntime:
 
     @classmethod
     def _signal_handler(cls, signum: int, frame: Optional[Any]) -> None:
-        """Handle SIGTERM/SIGINT by triggering graceful shutdown, then re-raise."""
+        """Handle SIGTERM/SIGINT by triggering graceful shutdown, then sys.exit
+        to allow atexit handlers (including Docker container cleanup) to run."""
         sig_name = signal.Signals(signum).name
         _logger.info("\nReceived %s, initiating graceful shutdown...", sig_name)
         cls.graceful_shutdown()
-        # Re-raise so the process still exits
-        signal.signal(signum, signal.SIG_DFL)
-        os.kill(os.getpid(), signum)
+        # Use sys.exit to allow normal Python shutdown — this triggers
+        # atexit handlers (including Docker container cleanup) and
+        # thread cleanup, whereas os.kill hard-terminates the process.
+        sys.exit(0)
 
     @classmethod
     def _register_signal_handlers(cls) -> None:
@@ -741,7 +744,9 @@ class AgentRuntime:
 
     def handle_message(self, agent_id: str, external_user_id: str,
                        message: str, channel_id: Optional[str] = None,
-                       image_url: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       image_url: Optional[str] = None,
+                       metadata: Optional[Dict[str, Any]] = None,
+                       skip_buffer: bool = False) -> Dict[str, Any]:
         """Process an incoming user message. Always queued for processing.
 
         - With buffer: debounce rapid messages, queue when timer fires.
@@ -750,11 +755,19 @@ class AgentRuntime:
         Args:
             image_url: Optional base64 data URL or http URL for vision-enabled agents.
             metadata: Optional extra metadata merged into the saved message record.
+            skip_buffer: If True, bypass message buffering even if the agent has
+                message_buffer_seconds set. Used by API routes that need a synchronous
+                response (e.g. /chat/completions).
         """
         # Normalize external_user_id — system-internal messages (e.g. restart
         # greeting) may arrive with None when no external user is associated.
         if external_user_id is None:
             external_user_id = '__system__'
+
+        _logger.info(
+            "[handle_message] agent=%s sender=%s msg_preview=%.80r",
+            agent_id, external_user_id, message,
+        )
 
         agent = db.get_agent(agent_id)
         db_agent_id = agent_id  # Default: agent's own per-agent chat DB
@@ -905,7 +918,8 @@ class AgentRuntime:
         # in a DIFFERENT session, reject this message with a contextual explanation.
         # Check focus first (requires DB read) only when agent-level busy is confirmed.
         if agent.get('enable_agent_state') and self.is_agent_busy(agent_id):
-            busy_entry = self._agent_tracker._busy.get(agent_id)
+            with self._agent_tracker._guard:
+                busy_entry = self._agent_tracker._busy.get(agent_id)
             if busy_entry and busy_entry['session_id'] != session_id:
                 ms = self._restore_agent_state(agent_id)
                 if ms and ms.focus:
@@ -917,6 +931,10 @@ class AgentRuntime:
         # into the active loop instead of blocking/queuing a new task.
         # Message is already saved to DB above, so DB order is preserved.
         if self._is_busy(session_id):
+            _logger.info(
+                "[handle_message] agent=%s session=%s — session busy, injecting into active loop.",
+                agent_id, session_id,
+            )
             self._get_inject_queue(session_id).put({
                 'role': 'user',
                 'content': message or '[Image]',
@@ -932,8 +950,13 @@ class AgentRuntime:
             return {"response": None, "injected": True, "tool_trace": [], "timeline": []}
 
         # Message buffering: debounce rapid messages, then queue
+        # Skip when skip_buffer=True (e.g. API routes need synchronous response)
         buffer_seconds = agent.get('message_buffer_seconds', DEFAULT_BUFFER_SECONDS) or 0
-        if buffer_seconds > 0:
+        if buffer_seconds > 0 and not skip_buffer:
+            _logger.info(
+                "[handle_message] agent=%s session=%s — buffering for %ss.",
+                agent_id, session_id, buffer_seconds,
+            )
             task = _QueueTask(agent, SessionContext(session_id, external_user_id, channel_id,
                                                     session_db_agent_id=db_agent_id if is_subagent else None),
                               send_via_channel=True)
@@ -956,7 +979,12 @@ class AgentRuntime:
         # The sub-agent/target processes asynchronously and results are delivered via
         # _on_final_answer auto-forward, not via the return value.
         if external_user_id and external_user_id.startswith('__agent__'):
-            task = _QueueTask(agent, SessionContext(session_id, external_user_id, channel_id),
+            _logger.info(
+                "[handle_message] agent=%s session=%s — inter-agent message from %s, queued async (fire-and-forget).",
+                agent_id, session_id, external_user_id,
+            )
+            task = _QueueTask(agent, SessionContext(session_id, external_user_id, channel_id,
+                                                    session_db_agent_id=db_agent_id if is_subagent else None),
                               send_via_channel=False)
             self._message_queue.put(task)
             return {"response": None, "async": True, "tool_trace": [], "timeline": []}
@@ -1029,16 +1057,26 @@ class AgentRuntime:
             _logger.error("Unhandled exception in _do_process_inner for session %s: %s\n%s",
                             ctx.session_id, exc, traceback.format_exc())
             if not _turn_complete_emitted:
+                _err_dur = round(time.time() - _turn_start, 1)
+                _err_msg = 'An unexpected error occurred while processing your request.'
+                # Write to chatlog so reconnecting clients (poll-based) also see the turn ended.
+                try:
+                    chatlog = chatlog_manager.get(ctx.session_db_agent_id or agent_id, ctx.session_id)
+                    chatlog.append({'type': 'error', 'session_id': ctx.session_id,
+                                    'content': _err_msg, 'metadata': {'error': True, 'thinking_duration': _err_dur}})
+                    chatlog.append({'type': 'turn_end', 'session_id': ctx.session_id, 'thinking_duration': _err_dur})
+                except Exception:
+                    pass
                 event_stream.emit('turn_complete', {
                     'agent_id': agent_id,
                     'agent_name': agent.get('name', ''),
                     'session_id': ctx.session_id,
                     'external_user_id': ctx.external_user_id,
                     'channel_id': ctx.channel_id,
-                    'response': 'An unexpected error occurred while processing your request.',
+                    'response': _err_msg,
                     'tool_trace': [],
                     'is_error': True,
-                    'thinking_duration': round(time.time() - _turn_start, 1),
+                    'thinking_duration': _err_dur,
                 })
                 self._bg_executor.submit(
                     lambda sid=ctx.session_id: (time.sleep(SESSION_BUFFER_CLEANUP_DELAY), event_stream.cleanup_session_buffer(sid)),
@@ -1113,7 +1151,7 @@ class AgentRuntime:
         _db_retry(db.add_chat_message, ctx.session_id, 'assistant', reply,
                   agent_id=db_agent_id, metadata={'evonet_offline': True},
                   label="save evonet offline reply")
-        chatlog_manager.get(agent['id'], ctx.session_id).append({
+        chatlog_manager.get(db_agent_id, ctx.session_id).append({
             'type': 'final', 'session_id': ctx.session_id,
             'content': reply,
             'metadata': {'evonet_offline': True},
@@ -1237,58 +1275,84 @@ class AgentRuntime:
         summary_record = db.get_summary(ctx.session_id, agent_id=db_agent_id)
         chatlog = chatlog_manager.get(db_agent_id, ctx.session_id)
 
-        # Prefer JSONL-based context if the log has entries for this session
-        _jsonl_entries = chatlog.get_entries_for_llm(
-            after_ts=summary_record.get('last_message_ts') if summary_record else None,
-        )
-        # NOTE: The second condition handles an edge case where _jsonl_entries is empty
-        # but the chatlog still has entries for this session. This happens when ALL
-        # messages after the summary are themselves covered by the summary (after_ts
-        # filter returns nothing). In this scenario, conv_msgs will be [] which is
-        # intentional — sufficient context is already provided by the summary + the
-        # current user message. This is NOT a bug; we still take the JSONL path
-        # (instead of falling back to SQLite) because the session has been migrated.
-        _use_jsonl = bool(_jsonl_entries) or chatlog.get_last_entry() is not None
-
-        if summary_record:
-            messages.append({
-                "role": "system",
-                "content": f"## Prior conversation summary\n{summary_record['summary']}"
-            })
-
-        if _use_jsonl:
-            # Use JSONL-based context (new path)
-            conv_msgs = _jsonl_entries
-            # The tail must start with a 'user' message
-            tail_start = 0
-            while tail_start < len(conv_msgs) and conv_msgs[tail_start].get('role') != 'user':
-                tail_start += 1
-            for msg in conv_msgs[tail_start:]:
-                # Skip slash command messages — they are handled directly by the
-                # command executor and must never enter LLM context. Both the user
-                # command echo and the assistant response carry metadata.slash_command.
-                role = msg.get('role', '')
-                if role == 'user' and (msg.get('content') or '').startswith('/'):
-                    continue
-                if (msg.get('metadata') or {}).get('slash_command'):
-                    continue
-                messages.append(_apply_vision(msg))
+        if _used_prefetch:
+            # Prefetch already contains the full conversation history (system prompt +
+            # all prior turns). Appending the full JSONL tail again would duplicate
+            # every tool_call_id, causing the API to reject with "tool must follow
+            # tool_calls". Only append the current (new) user message.
+            _cur_user = chatlog.get_last_entry(types=frozenset({'user'}))
+            if _cur_user and not (_cur_user.get('metadata') or {}).get('slash_command'):
+                _cur_content = _cur_user.get('content', '')
+                # Guard against the rare race where prefetch ran after the user message
+                # was saved and already includes it as the last message.
+                if not messages or messages[-1].get('role') != 'user' or messages[-1].get('content') != _cur_content:
+                    _cur_msg: Dict[str, Any] = {'role': 'user', 'content': _cur_content}
+                    _img = (_cur_user.get('metadata') or {}).get('image_url')
+                    if _img:
+                        _cur_msg['_image_url'] = _img
+                    messages.append(_apply_vision(_cur_msg))
         else:
-            # Fall back to SQLite (pre-migration sessions with no JSONL data)
+            # Prefer JSONL-based context if the log has entries for this session
+            _jsonl_entries = chatlog.get_entries_for_llm(
+                after_ts=summary_record.get('last_message_ts') if summary_record else None,
+            )
+            # NOTE: The second condition handles an edge case where _jsonl_entries is empty
+            # but the chatlog still has entries for this session. This happens when ALL
+            # messages after the summary are themselves covered by the summary (after_ts
+            # filter returns nothing). In this scenario, conv_msgs will be [] which is
+            # intentional — sufficient context is already provided by the summary + the
+            # current user message. This is NOT a bug; we still take the JSONL path
+            # (instead of falling back to SQLite) because the session has been migrated.
+            _use_jsonl = bool(_jsonl_entries) or chatlog.get_last_entry() is not None
+
             if summary_record:
-                raw_tail = db.get_messages_after(ctx.session_id, summary_record['last_message_id'],
-                                                  agent_id=db_agent_id)
+                messages.append({
+                    "role": "system",
+                    "content": f"## Prior conversation summary\n{summary_record['summary']}"
+                })
+
+            if _use_jsonl:
+                # Use JSONL-based context (new path)
+                conv_msgs = _jsonl_entries
+                # When no summary exists, skip leading non-user messages so the
+                # conversation starts with a user turn.  When a summary IS present,
+                # keep leading assistant messages (unsummarized continuation) but
+                # still skip orphaned tool responses (no preceding tool_calls).
                 tail_start = 0
-                while tail_start < len(raw_tail) and raw_tail[tail_start].get('role') != 'user':
-                    tail_start += 1
-                for msg in raw_tail[tail_start:]:
-                    if not _is_legacy_agent_state_msg(msg) and not _is_ui_only_msg(msg) and not _is_slash_command_msg(msg):
-                        messages.append(_ctx.build_message_entry(msg, agent))
+                if not summary_record:
+                    while tail_start < len(conv_msgs) and conv_msgs[tail_start].get('role') != 'user':
+                        tail_start += 1
+                else:
+                    while tail_start < len(conv_msgs) and conv_msgs[tail_start].get('role') == 'tool':
+                        tail_start += 1
+                for msg in conv_msgs[tail_start:]:
+                    # Skip slash command messages — they are handled directly by the
+                    # command executor and must never enter LLM context. Both the user
+                    # command echo and the assistant response carry metadata.slash_command.
+                    role = msg.get('role', '')
+                    if role == 'user' and (msg.get('content') or '').startswith('/'):
+                        continue
+                    if (msg.get('metadata') or {}).get('slash_command'):
+                        continue
+                    messages.append(_apply_vision(msg))
             else:
-                history = db.get_session_messages(ctx.session_id, limit=50, agent_id=db_agent_id)
-                for msg in history:
-                    if not _is_legacy_agent_state_msg(msg) and not _is_ui_only_msg(msg) and not _is_slash_command_msg(msg):
-                        messages.append(_ctx.build_message_entry(msg, agent))
+                # Fall back to SQLite (pre-migration sessions with no JSONL data)
+                if summary_record:
+                    raw_tail = db.get_messages_after(ctx.session_id, summary_record['last_message_id'],
+                                                      agent_id=db_agent_id)
+                    # Keep unsummarized continuation but skip orphaned tool
+                    # responses that lack a preceding assistant tool_calls message.
+                    tail_start = 0
+                    while tail_start < len(raw_tail) and raw_tail[tail_start].get('role') == 'tool':
+                        tail_start += 1
+                    for msg in raw_tail[tail_start:]:
+                        if not _is_legacy_agent_state_msg(msg) and not _is_ui_only_msg(msg) and not _is_slash_command_msg(msg):
+                            messages.append(_ctx.build_message_entry(msg, agent))
+                else:
+                    history = db.get_session_messages(ctx.session_id, limit=50, agent_id=db_agent_id)
+                    for msg in history:
+                        if not _is_legacy_agent_state_msg(msg) and not _is_ui_only_msg(msg) and not _is_slash_command_msg(msg):
+                            messages.append(_ctx.build_message_entry(msg, agent))
 
         # Ensure messages don't end with assistant role (causes prefill error with some APIs)
         while len(messages) > 1 and messages[-1].get('role') == 'assistant':
@@ -1376,6 +1440,8 @@ class AgentRuntime:
                 'workspace': _workspace,
                 'workplace_id': _workplace_id,
                 'is_super': bool(agent.get('is_super')),
+                'is_subagent': bool(agent.get('is_subagent')),
+                'parent_id': agent.get('parent_id'),
                 'agent_messaging_enabled': bool(agent.get('agent_messaging_enabled')),
                 'sandbox_enabled': agent.get('sandbox_enabled', 1),
                 'safety_checker_enabled': agent.get('safety_checker_enabled', 1),
@@ -1408,7 +1474,7 @@ class AgentRuntime:
 
         # Agent state: restore or create, then check for user approval
         if agent.get('enable_agent_state'):
-            ms = self._restore_agent_state(db_agent_id)
+            ms = self._restore_agent_state(db_agent_id, session_id=ctx.session_id)
             is_new_session = ms is None
             if is_new_session:
                 # Classify task complexity to decide initial mode
@@ -1619,18 +1685,42 @@ class AgentRuntime:
             entry["tool_call_id"] = msg["tool_call_id"]
         return entry
 
-    def _restore_agent_state(self, agent_id: str) -> Optional['AgentState']:
-        """Restore the last persisted AgentState from the dedicated agent_state table."""
-        content = db.get_agent_state(agent_id=agent_id)
-        if content:
-            return AgentState.deserialize(content)
+    def _restore_agent_state(self, agent_id: str, session_id: str = None) -> Optional['AgentState']:
+        """Restore agent state, merging per-session and global fields.
+
+        When session_id is provided:
+          - Per-session fields (mode/tasks/plan_file/states/auto_trivial) come from session_state.
+          - Global fields (focus/focus_reason) come from agent_state (__agent__).
+          - They are merged into a single AgentState object.
+
+        When session_id is None (busy rejection path):
+          - Only global fields (focus/focus_reason) are loaded from agent_state.
+        """
+        import json as _json
+
+        agent_content = db.get_agent_state(agent_id=agent_id)
+        agent_data = _json.loads(agent_content) if agent_content else {}
+
+        if session_id:
+            session_content = db.get_session_state(session_id, agent_id=agent_id)
+            session_data = _json.loads(session_content) if session_content else {}
+            # Merge: session fields override global defaults.
+            # focus/focus_reason in agent_data act as fallback; session_data
+            # does not contain focus fields so global values are preserved.
+            merged = {**agent_data, **session_data}
+        else:
+            # Only need focus/focus_reason for busy rejection
+            merged = agent_data
+
+        if merged:
+            return AgentState.deserialize(_json.dumps(merged))
         return None
 
-    _APPROVAL_PATTERNS = [
-        'lanjut', 'ok', 'oke', 'approved', 'approve', 'setuju', 'go ahead',
-        'proceed', 'execute', 'yes', 'ya', 'yep', 'sure', 'confirm', 'done',
-        'boleh', 'silakan', 'silahkan', 'jalankan', 'mulai', 'start',
-    ]
+    _APPROVAL_RE = re.compile(
+        r'\b(lanjut|ok|oke|approved|approve|setuju|go ahead|proceed|execute|'
+        r'yes|ya|yep|sure|confirm|done|boleh|silakan|silahkan|jalankan|mulai|start)\b',
+        re.IGNORECASE,
+    )
 
     @classmethod
     @staticmethod
@@ -1756,6 +1846,50 @@ class AgentRuntime:
         agent_id = session['agent_id']
         external_user_id = session['external_user_id']
         channel_id = session.get('channel_id')
+
+        # Slash command interception — execute immediately instead of sending to LLM
+        parsed = parse_command(text)
+        if parsed:
+            cmd_name, cmd_args = parsed
+            response = execute_command(
+                cmd_name, cmd_args, session_id, agent_id,
+                external_user_id, channel_id,
+            )
+            if response is not None:
+                # Command was recognized — save command echo and response, then return
+                db.add_chat_message(session_id, 'user', text,
+                                    agent_id=agent_id, metadata={'slash_command': True})
+                db.add_chat_message(session_id, 'assistant', response,
+                                    agent_id=agent_id, metadata={'slash_command': True})
+                _cl = chatlog_manager.get(agent_id, session_id)
+                _cl.append({'type': 'user', 'session_id': session_id, 'content': text,
+                            'sender_id': external_user_id,
+                            'metadata': {'slash_command': True}})
+                _cl.append({'type': 'system', 'session_id': session_id, 'content': response,
+                            'metadata': {'slash_command': True}})
+                agent = db.get_agent(agent_id)
+                # Emit turn_complete so SSE client shows the response
+                event_stream.emit('turn_complete', {
+                    'agent_id': agent_id,
+                    'agent_name': agent.get('name', '') if agent else '',
+                    'session_id': session_id,
+                    'external_user_id': external_user_id,
+                    'channel_id': channel_id,
+                    'response': response,
+                    'tool_trace': [],
+                    'is_error': False,
+                    'thinking_duration': 0.0,
+                    'slash_command': True,
+                })
+                # Signal the client to clear the chat UI when the clear command was used
+                if cmd_name == 'clear':
+                    event_stream.emit('session_clear', {
+                        'session_id': session_id,
+                        'agent_id': agent_id,
+                    })
+                self._prefetcher.invalidate(session_id)
+                return True
+            # Unknown command — fall through to normal LLM processing
 
         db.add_chat_message(session_id, 'user', text, agent_id=agent_id)
         chatlog_manager.get(agent_id, session_id).append(

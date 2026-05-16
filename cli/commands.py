@@ -57,12 +57,12 @@ EVONIC_BANNER = (
 
          ░░░░░░░░░░░░░░░░░░░░░░░░
        ░░▒▒███████████████████▒▒░░
-     ░░▒▒██▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓██▒▒░░      ___________                  .__.
-     ░░▒▒██▓▓▒▒░░░░░░░░░░▒▒▓▓██▒▒░░      \_   _____/__  ______   ____ |__| _____
-     ░░▒▒██▓▓▒▒░░ ░░  ░░ ▒▒▓▓██▒▒░░       |    __)_\  \/ /    \ /    \|  |/ ____\
-     ░░▒▒██▓▓▒▒░░░░░░░░░░▒▒▓▓██▒▒░░       |        \\   (  ()  )   |  \  \  \____
-     ░░▒▒████████████████████▒▒░░░░      /_______  / \_/ \____/|___|  /__|\___  /
-       ░░▒▒░░░░░░░░░░░░░░░░░░░░                  \/                 \/        \/
+     ░░▒▒██▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓██▒▒░░      ___________                  .__.
+     ░░▒▒██▓█████████████████▓██▒▒░░      \_   _____/__  ______   ____ |__| _____
+     ░░▒▒██▓█████ ██  ██ ████▓██▒▒░░       |    __)_\  \/ /    \ /    \|  |/ ____\
+     ░░▒▒██▓█████████████████▓██▒▒░░       |        \\   (  ()  )   |  \  \  \____
+     ░░▒▒███████████████████████▒▒░░      /_______  / \_/ \____/|___|  /__|\___  /
+       ░░▒▒░░░░░░░░░░░░░░░░░░▒▒░░                 \/                 \/        \/
         ▓▓ ░░▓▓ ░░ ▓▓ ░░▓▓ ░░▓▓
       ▒▒ ░░ ▒▒ ▓▓  ▒▒  ▓▓   ▒▒▒
         ░░ ░▒░  ▓▓  ▒▒  ▓▓  ░▓
@@ -2566,6 +2566,14 @@ def update_server(
     cfg = sup.load_config(cfg_path)
     app_root = cfg["app_root"]
 
+    # Update root project first to keep CLI/supervisor code up-to-date
+    print("Updating root project from origin/main...")
+    rc, out, err = sup._git(app_root, ['pull', '--ff-only', 'origin', 'main'])
+    if rc != 0:
+        print(f"Git pull failed: {err or out}")
+        sys.exit(1)
+    print("Root project updated.")
+
     if rollback_flag:
         print("Rolling back to previous release...")
         ok = sup.rollback(app_root, cfg, None)
@@ -3197,6 +3205,46 @@ def doctor_command(quick=False):
 
     print()
     return 0 if failed == 0 else 1
+
+
+# ─── Sandbox Management ───────────────────────────────────────────────────────
+
+
+def clear_sandbox():
+    """Destroy all running evonic sandbox containers (force sweep)."""
+    result = subprocess.run(
+        ['docker', 'ps', '--filter', 'label=evonic.managed=1', '--format', '{{.Names}}'],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f'Error querying Docker: {result.stderr.strip()}')
+        sys.exit(1)
+
+    names = [n.strip() for n in result.stdout.splitlines() if n.strip()]
+    if not names:
+        print('No evonic sandbox containers running.')
+        return
+
+    print(f'Found {len(names)} sandbox container(s):')
+    for name in names:
+        print(f'  {name}')
+    print()
+
+    destroyed = 0
+    failed = 0
+    for name in names:
+        rm = subprocess.run(['docker', 'rm', '-f', name], capture_output=True, text=True)
+        if rm.returncode == 0:
+            print(f'  ✓ Destroyed {name}')
+            destroyed += 1
+        else:
+            print(f'  ✗ Failed to destroy {name}: {rm.stderr.strip()}')
+            failed += 1
+
+    print()
+    print(f'Done: {destroyed} destroyed, {failed} failed.')
+    if failed:
+        sys.exit(1)
 
 
 # ─── Channel Management ───────────────────────────────────────────────────────

@@ -16,7 +16,7 @@ def sessions():
 @sessions_bp.route('/api/sessions')
 def api_list_sessions():
     search = request.args.get('search', '').strip() or None
-    limit = request.args.get('limit', 50, type=int)
+    limit = min(request.args.get('limit', 50, type=int), 500)
     offset = request.args.get('offset', 0, type=int)
     exclude_test = request.args.get('exclude_test', '1') != '0'
     sessions, total = db.get_all_sessions(search=search, limit=limit, offset=offset,
@@ -55,7 +55,12 @@ def api_session_reply(session_id):
         ok = agent_runtime.send_as_bot(session_id, text)
     if not ok:
         return jsonify({'error': 'Session not found'}), 404
-    return jsonify({'success': True})
+    # Signal the frontend to clear the UI for /clear commands
+    is_clear = text.strip().startswith('/clear') if perspective == 'A' else False
+    resp = {'success': True}
+    if is_clear:
+        resp['clear_ui'] = True
+    return jsonify(resp)
 
 
 @sessions_bp.route('/api/sessions/<session_id>/stop', methods=['POST'])
@@ -112,6 +117,15 @@ def api_delete_session(session_id):
 
 @sessions_bp.route('/api/sessions/clear-all', methods=['POST'])
 def api_clear_all_sessions():
-    """Delete all chat sessions, messages, and summaries across all agents."""
+    """Delete all chat sessions, messages, summaries, and attachments
+    across all agents."""
     db.clear_all_sessions()
     return jsonify({'success': True})
+
+
+@sessions_bp.route('/api/attachments/clear-all', methods=['POST'])
+def api_clear_all_attachments():
+    """Delete every stored attachment (DB rows + on-disk files) across all
+    agents and sessions, without touching chat sessions/messages."""
+    deleted, freed = db.delete_all_attachments()
+    return jsonify({'success': True, 'deleted': deleted, 'freed_bytes': freed})
