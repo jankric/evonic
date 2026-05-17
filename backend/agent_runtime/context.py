@@ -424,6 +424,17 @@ def build_system_prompt(agent: Dict[str, Any]) -> str:
         for name, desc in slash_commands:
             prompt += f"- `{name}` — {desc}\n"
 
+    # Inject artifacts directory path for agents with artifacts enabled
+    if agent.get('artifacts_enabled', True):
+        artifacts_path = os.path.join('/workspace/shared/agents', aid, 'artifacts')
+        prompt += (
+            "\n\n## Artifacts Directory\n"
+            f"Your artifacts directory is: `{artifacts_path}`\n"
+            "Files you save here will appear in the Artifacts tab on your agent detail page.\n"
+            "Use `save_artifact` tool for text files, or write files directly to this path "
+            "using `write_file` or bash/runpy for binary files (PDFs, images)."
+        )
+
     return prompt
 
 

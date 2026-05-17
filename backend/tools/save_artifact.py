@@ -4,8 +4,11 @@ Tool: save_artifact -- allows agents to save files to their artifacts directory.
 Artifacts are files produced by agents during their work -- reports, analysis,
 generated images, PDFs, markdown output, etc. They are stored under
 shared/agents/<agent-id>/artifacts/ and are accessible via the web UI.
+
+Supports both text mode (default) and base64 mode for binary files (PDFs, images, etc.).
 """
 
+import base64
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,6 +28,7 @@ def execute(agent: dict, args: dict) -> dict:
     filename = args.get('filename', '').strip()
     content = args.get('content', '')
     mime_type = args.get('mime_type', '')
+    mode = args.get('mode', 'text')
 
     if not filename:
         return {'error': 'filename is required'}
@@ -37,8 +41,13 @@ def execute(agent: dict, args: dict) -> dict:
     filepath = os.path.join(artifacts_dir, filename)
 
     try:
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content)
+        if mode == 'base64':
+            decoded = base64.b64decode(content)
+            with open(filepath, 'wb') as f:
+                f.write(decoded)
+        else:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
         stat = os.stat(filepath)
         return {
             'result': 'Artifact saved successfully',
