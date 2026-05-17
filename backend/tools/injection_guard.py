@@ -453,14 +453,25 @@ _RULES: list[tuple] = [
     (
         "credential_extraction",
         _r(
-            r"\b(password|passwd|secret\s+key|api\s+key|token|credential|"
-            r"private\s+key|auth\s+token|sandi|kunci\s+rahasia)\b"
+            r"\b(password|passwd|secret\s+key|api\s+key|credential|"
+            r"private\s+key|sandi|kunci\s+rahasia)\b"
             r".{0,60}"
             r"\b(show|reveal|tell|output|print|give\s+me|share|tampilkan|berikan)\b"
         ),
         CRITICAL,
         "Data Extraction",
         "Attempt to extract credentials / sensitive data.",
+    ),
+    (
+        "token_extraction_attempt",
+        _r(
+            r"\b(token|auth\s+token)\b"
+            r".{0,60}"
+            r"\b(show|reveal|tell|output|print|give\s+me|share|tampilkan|berikan)\b"
+        ),
+        LOW,
+        "Data Extraction",
+        "Token mentioned with extraction verb \u2014 low severity to avoid blocking legitimate code usage.",
     ),
 
     # ── 13. ROT13 Obfuscation ──────────────────────────────────────────
