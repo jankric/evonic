@@ -40,7 +40,7 @@
                         <span id="status-text">{{ status.status|upper }}</span>
                     </div>
                     <span id="run-id-display" class="text-gray-400 dark:text-gray-500 text-xs{{ '' if status.run_id else ' hidden' }}">
-                        Run <code id="run-id-code" class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded text-gray-600 dark:text-gray-300">#{{ "%04d"|format(status.run_info.run_id) if status.run_info else status.run_id if status.run_id else '0000' }}</code>
+                        Run <a id="run-id-link" href="/history/{{ status.run_info.run_id if status.run_info else status.run_id if status.run_id else '' }}" class="{{ 'pointer-events-none' if status.status != 'completed' else '' }}"><code id="run-id-code" class="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded {{ 'text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 cursor-pointer' if status.status == 'completed' else 'text-gray-600 dark:text-gray-300' }}">#{{ status.run_info.run_id if status.run_info else status.run_id if status.run_id else '' }}</code></a>
                     </span>
                     <span id="model-display" class="text-gray-500 dark:text-gray-400 text-xs{{ '' if (status.run_info and status.run_info.model_name) else ' hidden' }}">
                         <strong id="model-name-text" class="text-indigo-500 font-medium">{{ status.run_info.model_name if status.run_info and status.run_info.model_name else '' }}</strong>
@@ -455,6 +455,15 @@ function clearMatrixState() {
     document.getElementById('progress-text').textContent = `0/${totalTests} tests completed`;
 }
 
+function enableRunIdLink(runId) {
+    const link = document.getElementById('run-id-link');
+    const code = document.getElementById('run-id-code');
+    link.classList.remove('pointer-events-none');
+    link.href = '/history/' + runId;
+    code.classList.remove('text-gray-600', 'dark:text-gray-300');
+    code.classList.add('text-indigo-600', 'dark:text-indigo-400', 'hover:text-indigo-800', 'dark:hover:text-indigo-300', 'cursor-pointer');
+}
+
 function saveState(data) {
     const state = {
         run_id: data.run_id,
@@ -499,9 +508,13 @@ function loadSavedState() {
                 document.getElementById('model-display').classList.remove('hidden');
             }
             if (state.run_id) {
-                document.getElementById('run-id-code').textContent = '#' + String(state.run_id).padStart(4, '0');
+                document.getElementById('run-id-code').textContent = '#' + state.run_id;
+                document.getElementById('run-id-link').href = '/history/' + state.run_id;
                 document.getElementById('run-id-display').classList.remove('hidden');
                 currentRunId = state.run_id;
+                if (state.status === 'completed') {
+                    enableRunIdLink(state.run_id);
+                }
             }
             // Restore summary box on page refresh for completed evaluations
             if (state.status === 'completed') {
@@ -808,14 +821,16 @@ function updateStatus() {
         }
         // Update run ID display
         if (data.run_id) {
-            document.getElementById('run-id-code').textContent = '#' + String(data.run_id).padStart(4, '0');
+            document.getElementById('run-id-code').textContent = '#' + data.run_id;
+            document.getElementById('run-id-link').href = '/history/' + data.run_id;
             document.getElementById('run-id-display').classList.remove('hidden');
         }
-        
+
         // Save state for persistence
         saveState(data);
-        
+
         if (data.status === 'completed' || data.status === 'interrupted' || data.status === 'error') {
+            enableRunIdLink(data.run_id);
             clearInterval(pollingInterval);
             updateToggleButton(false);
             showClearButton(true);
