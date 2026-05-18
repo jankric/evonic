@@ -73,6 +73,9 @@ html.dark #compiled-prompt-modal .bg-amber-100 { background: #451a03 !important;
 html.dark #compiled-prompt-modal .text-amber-700 { color: #fcd34d !important; }
 html.dark #compiled-prompt-modal .tab-btn { color: #9ca3af !important; }
 html.dark #compiled-prompt-modal .tab-btn:hover { color: #f3f4f6 !important; }
+/* Chevron rotation for collapsible sections */
+#compiled-prompt-modal .chevron { display: inline-block; transition: transform 0.2s ease; }
+#compiled-prompt-modal .chevron.rotated { transform: rotate(90deg); }
 /* Dark mode: Skills tab (selected skill badges) */
 html.dark #tab-skills .bg-white { background: #1f2937 !important; }
 html.dark #tab-skills .border-gray-200 { border-color: #374151 !important; }
@@ -820,7 +823,9 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
 <div id="compiled-prompt-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
     <div class="bg-white dark:bg-gray-800 rounded-xl w-[90%] max-w-[800px] shadow-xl flex flex-col relative" style="max-height: 85vh;">
         <div class="flex justify-between items-center p-5 border-b border-gray-200">
-            <h3 class="text-gray-800 font-semibold dark:text-gray-100">Compiled Context</h3>
+            <h3 class="text-gray-800 font-semibold dark:text-gray-100">Compiled Context
+                <span id="compiled-token-badge" class="hidden text-[10px] font-medium px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-500/30 dark:text-indigo-200 ml-2 align-middle"></span>
+            </h3>
             <button onclick="document.getElementById('compiled-prompt-modal').classList.add('hidden')" class="bg-transparent border-none text-gray-400 text-2xl cursor-pointer hover:text-gray-800">&times;</button>
         </div>
         <!-- Loading Spinner Overlay -->
@@ -841,7 +846,11 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
         <!-- System Prompt Tab -->
         <div id="prompt-tab-prompt" class="p-5 flex-1 overflow-y-auto space-y-4">
             <div>
-                <h4 class="text-sm font-semibold text-gray-700 mb-2">System Prompt</h4>
+                <h4 class="text-sm font-semibold text-gray-700 mb-2 cursor-pointer flex items-center gap-1" onclick="var pre=document.getElementById('compiled-prompt-text'); pre.classList.toggle('hidden'); this.querySelector('.chevron').classList.toggle('rotated')">
+                    System Prompt
+                    <span class="chevron rotated text-gray-400 text-[10px]">&#9656;</span>
+                    <span id="compiled-sp-tokens" class="text-xs font-normal text-gray-400 ml-1"></span>
+                </h4>
                 <pre id="compiled-prompt-text" class="bg-gray-50 border border-gray-200 rounded-md p-4 text-xs text-gray-700 font-mono whitespace-pre-wrap overflow-x-auto"></pre>
             </div>
             <div>
@@ -849,6 +858,7 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
                     Tool Definitions
                     <span class="chevron text-gray-400 text-[10px] transition-transform">&#9656;</span>
                     <span id="compiled-tools-count" class="text-xs font-normal text-gray-400 ml-1"></span>
+                    <span id="compiled-tool-tokens" class="text-xs font-normal text-gray-400 ml-1"></span>
                 </h4>
                 <pre id="compiled-tools-json" class="hidden bg-gray-50 border border-gray-200 rounded-md p-4 text-xs text-gray-700 font-mono whitespace-pre-wrap overflow-x-auto" style="max-height: 400px;"></pre>
             </div>
@@ -3214,6 +3224,17 @@ async function showCompiledPrompt() {
     const tools = data.tools || [];
     document.getElementById('compiled-tools-count').textContent = `(${tools.length} tools)`;
     document.getElementById('compiled-tools-json').textContent = JSON.stringify(tools, null, 2);
+
+    // Token estimates
+    const tokens = data.tokens || {};
+    const spTokens = tokens.system_prompt || 0;
+    const toolTokens = tokens.tool_definitions || 0;
+    const totalTokens = tokens.total || 0;
+    document.getElementById('compiled-sp-tokens').textContent = `\u2014 ~${spTokens.toLocaleString()} tokens`;
+    document.getElementById('compiled-tool-tokens').textContent = `\u2014 ~${toolTokens.toLocaleString()} tokens`;
+    const tokenBadge = document.getElementById('compiled-token-badge');
+    tokenBadge.textContent = `~${totalTokens.toLocaleString()} tokens`;
+    tokenBadge.classList.remove('hidden');
 
     // LLM Request tab
     const badge = document.getElementById('llm-preview-badge');
