@@ -148,6 +148,9 @@ def _build_static_prompt(agent: Dict[str, Any]) -> str:
                 seen_fn_names.add(fn_name)
                 tool_prompt = tool_def.get('system_prompt', '').strip()
                 if tool_prompt:
+                    if not agent.get('sandbox_enabled'):
+                        tool_prompt = tool_prompt.replace('/workspace/shared/agents/', '')
+                        tool_prompt = tool_prompt.replace('/workspace', 'the agents working directory')
                     parts.append(tool_prompt)
 
     # List available KB files so the agent knows what it can read
@@ -432,14 +435,22 @@ def build_system_prompt(agent: Dict[str, Any],
 
     # Inject artifacts directory path for agents with artifacts enabled
     if agent.get('artifacts_enabled', True):
-        artifacts_path = os.path.join('/workspace/shared/agents', aid, 'artifacts')
-        prompt += (
-            "\n\n## Artifacts Directory\n"
-            f"Your artifacts directory is: `{artifacts_path}`\n"
-            "Files you save here will appear in the Artifacts tab on your agent detail page.\n"
-            "Use `save_artifact` tool for text files, or write files directly to this path "
-            "using `write_file` or bash/runpy for binary files (PDFs, images)."
-        )
+        if agent.get('sandbox_enabled'):
+            artifacts_path = os.path.join('/workspace/shared/agents', aid, 'artifacts')
+            artifacts_note = (
+                f"Your artifacts directory is: `{artifacts_path}`\n"
+                "Files you save here will appear in the Artifacts tab on your agent detail page.\n"
+                "Use `save_artifact` tool for text files, or write files directly to this path "
+                "using `write_file` or bash/runpy for binary files (PDFs, images)."
+            )
+        else:
+            artifacts_note = (
+                "Your artifacts directory is available via the `save_artifact` tool. "
+                "You can also save files directly to your artifacts directory "
+                "using `write_file` or bash/runpy.\n"
+                "Files you save there will appear in the Artifacts tab on your agent detail page."
+            )
+        prompt += "\n\n## Artifacts Directory\n" + artifacts_note
 
     # ── Intent-based skill injection ──
     # Inject per-turn tool usage guidance when session context is available.
@@ -523,6 +534,22 @@ def build_tools(agent: Dict[str, Any],
             tools = skill_injector.get_filtered_tools(session_id, user_prompt, tools)
         except Exception:
             _logger.debug("Tool filtering skipped for session %s", session_id, exc_info=True)
+
+    # ── Patch /workspace references for non-sandbox (workplace) agents ──
+    # Tool JSON definitions contain /workspace paths in function descriptions
+    # and parameter descriptions. Workplace agents are misled into trying to
+    # use paths that don't exist on their system.
+    if not agent.get('sandbox_enabled'):
+        for tool in tools:
+            func = tool.get('function', {})
+            # Patch function-level description
+            if 'description' in func and '/workspace' in func['description']:
+                func['description'] = func['description'].replace('/workspace', 'the agents working directory')
+            # Patch parameter descriptions
+            for param_name, param_def in func.get('parameters', {}).get('properties', {}).items():
+                if isinstance(param_def, dict) and 'description' in param_def:
+                    if '/workspace' in param_def['description']:
+                        param_def['description'] = param_def['description'].replace('/workspace', 'the agents working directory')
 
     return tools
 
