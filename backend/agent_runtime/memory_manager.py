@@ -177,7 +177,7 @@ def get_memories_for_context(agent_id: str, messages: list,
         if not memories:
             return None
 
-        lines = ["## Long-term Memory",
+        lines = ["## Memory",
                  "Facts remembered from past conversations:"]
         for m in memories:
             lines.append(f"- [{m['category']}] {m['content']}")
