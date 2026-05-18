@@ -533,7 +533,7 @@ def run_setup(
         if password:
             from werkzeug.security import generate_password_hash
 
-            pw_hash = generate_password_hash(password)
+            pw_hash = generate_password_hash(password, method="pbkdf2:sha256")
             env_path = os.path.join(config.BASE_DIR, ".env")
             _update_env_var(env_path, "ADMIN_PASSWORD_HASH", pw_hash)
 
@@ -663,7 +663,7 @@ def run_reconfigure(
         if password:
             from werkzeug.security import generate_password_hash
 
-            pw_hash = generate_password_hash(password)
+            pw_hash = generate_password_hash(password, method="pbkdf2:sha256")
             env_path = os.path.join(config.BASE_DIR, ".env")
             _update_env_var(env_path, "ADMIN_PASSWORD_HASH", pw_hash)
 
