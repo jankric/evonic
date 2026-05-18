@@ -43,7 +43,6 @@ from backend.agent_runtime.quality_monitor import (
     check_loop_detection as _qm_check_loop,
     MAX_CONSECUTIVE_CORRECTIONS as MAX_QM_CORRECTIONS,
 )
-from backend.agent_runtime import skill_injector
 from backend.agent_runtime.output_parser import (
     has_malformed_calls,
     detect_all as detect_malformed_tool_calls,
@@ -1493,16 +1492,6 @@ def run_tool_loop(agent: Dict[str, Any],
 
             # Record in trace (for animated bubbles)
             tool_trace.append({"tool": fn_name, "args": args, "result": result_dict})
-
-            # ── Skill injection tracking ──
-            # Record tool call for recency/intent-based tool selection.
-            try:
-                skill_injector.record_tool_call(
-                    session_id, fn_name,
-                    success=not has_error
-                )
-            except Exception:
-                pass
 
             # Save tool result message (same as LLM receives, for UI consistency)
             db.add_chat_message(session_id, 'tool', llm_result_str, tool_call_id=_tc['id'], agent_id=db_agent_id)
