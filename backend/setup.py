@@ -75,6 +75,14 @@ PROVIDER_DEFAULTS = {
         # prior assistant messages, so default thinking on for this provider.
         "default_thinking": True,
     },
+    "deepseek": {
+        "type": "remote",
+        "base_url": "https://api.deepseek.com",
+        "api_key_required": True,
+        "placeholder_model": "deepseek-v4-pro",
+        "label": "DeepSeek",
+        "description": "Cloud · API key required",
+    },
     "llama.cpp": {
         "type": "local",
         "base_url": "http://localhost:8080/v1",
