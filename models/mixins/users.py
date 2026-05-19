@@ -257,11 +257,49 @@ class UserMixin:
                 f"UPDATE users SET {set_clause}, updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL",
                 values
             )
+            rc = cursor.rowcount
             self._log_audit(cursor, user_id, 'updated', actor_type, actor_id,
                             {'changes': filtered})
             conn.commit()
-            if cursor.rowcount > 0:
+            if rc > 0:
                 emit('user.updated', {'user_id': user_id, 'changes': filtered})
+                return True
+        return False
+
+    def block_user(self, user_id: str, reason: str = '',
+                   actor_type: str = None, actor_id: str = None) -> bool:
+        """Block a user by setting is_approved=2."""
+        with self._connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET is_approved = 2, blocked_at = datetime('now'), "
+                "blocked_reason = ?, updated_at = datetime('now') "
+                "WHERE id = ? AND deleted_at IS NULL",
+                (reason, user_id))
+            rc = cursor.rowcount
+            self._log_audit(cursor, user_id, 'blocked', actor_type, actor_id,
+                            {'reason': reason})
+            conn.commit()
+            if rc > 0:
+                emit('user.blocked', {'user_id': user_id, 'reason': reason})
+                return True
+        return False
+
+    def unblock_user(self, user_id: str,
+                     actor_type: str = None, actor_id: str = None) -> bool:
+        """Unblock a user by setting is_approved=1."""
+        with self._connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET is_approved = 1, blocked_at = NULL, "
+                "blocked_reason = '', updated_at = datetime('now') "
+                "WHERE id = ? AND deleted_at IS NULL AND is_approved = 2",
+                (user_id,))
+            rc = cursor.rowcount
+            self._log_audit(cursor, user_id, 'unblocked', actor_type, actor_id)
+            conn.commit()
+            if rc > 0:
+                emit('user.unblocked', {'user_id': user_id})
                 return True
         return False
 
@@ -273,9 +311,10 @@ class UserMixin:
             now = datetime.utcnow().isoformat()
             cursor.execute("UPDATE users SET deleted_at = ?, updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL",
                            (now, user_id))
+            rc = cursor.rowcount
             self._log_audit(cursor, user_id, 'deleted', actor_type, actor_id)
             conn.commit()
-            if cursor.rowcount > 0:
+            if rc > 0:
                 emit('user.deleted', {'user_id': user_id})
                 return True
         return False
@@ -451,6 +490,21 @@ class UserMixin:
                 cursor.execute("SELECT * FROM user_contacts WHERE user_id = ? AND deleted_at IS NULL ORDER BY is_primary DESC, created_at", (user_id,))
             return self._rows_to_list(cursor.fetchall())
 
+    def find_user_by_contact(self, channel_type: str, external_user_id: str) -> Optional[Dict[str, Any]]:
+        """Find a user by their contact (channel_type + external_user_id)."""
+        with self._connect() as conn:
+            conn.row_factory = self._row_factory
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT u.* FROM users u
+                JOIN user_contacts uc ON uc.user_id = u.id
+                WHERE uc.channel_type = ? AND uc.external_user_id = ?
+                  AND uc.deleted_at IS NULL AND u.deleted_at IS NULL
+                LIMIT 1
+            """, (channel_type, external_user_id))
+            row = cursor.fetchone()
+            return self._row_to_dict(row)
+
     def update_contact(self, contact_id: int, updates: dict,
                        actor_type: str = None, actor_id: str = None) -> bool:
         """Update a contact record."""
@@ -481,10 +535,11 @@ class UserMixin:
             cursor.execute("UPDATE user_contacts SET is_primary = 0 WHERE user_id = ? AND deleted_at IS NULL", (user_id,))
             cursor.execute("UPDATE user_contacts SET is_primary = 1, updated_at = datetime('now') WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
                            (contact_id, user_id))
+            rc = cursor.rowcount
             self._log_audit(cursor, user_id, 'contact_primary_changed', actor_type, actor_id,
                             {'contact_id': contact_id})
             conn.commit()
-            return cursor.rowcount > 0
+            return rc > 0
 
     def soft_delete_contact(self, contact_id: int, actor_type: str = None,
                             actor_id: str = None) -> bool:
@@ -497,10 +552,11 @@ class UserMixin:
                     is_active = 0, deleted_at = ?, updated_at = datetime('now')
                 WHERE id = ? AND deleted_at IS NULL
             """, (now, contact_id))
+            rc = cursor.rowcount
             self._log_audit(cursor, None, 'contact_removed', actor_type, actor_id,
                             {'contact_id': contact_id})
             conn.commit()
-            if cursor.rowcount > 0:
+            if rc > 0:
                 emit('contact.removed', {'contact_id': contact_id})
                 return True
         return False
@@ -557,20 +613,20 @@ class UserMixin:
             return self._rows_to_list(cursor.fetchall())
 
     def get_user_agents(self, user_id: str, include_removed: bool = False) -> List[Dict[str, Any]]:
-        """Get all agents linked to a user."""
+        """Get all agents linked to a user. Returns ua.* + a.id, a.name if available."""
         with self._connect() as conn:
             conn.row_factory = self._row_factory
             cursor = conn.cursor()
             if include_removed:
                 cursor.execute("""
-                    SELECT a.* FROM agents a
-                    JOIN user_agents ua ON ua.agent_id = a.id
+                    SELECT ua.*, a.name AS agent_name FROM user_agents ua
+                    LEFT JOIN agents a ON a.id = ua.agent_id
                     WHERE ua.user_id = ?
                 """, (user_id,))
             else:
                 cursor.execute("""
-                    SELECT a.* FROM agents a
-                    JOIN user_agents ua ON ua.agent_id = a.id
+                    SELECT ua.*, a.name AS agent_name FROM user_agents ua
+                    LEFT JOIN agents a ON a.id = ua.agent_id
                     WHERE ua.user_id = ? AND ua.removed_at IS NULL
                 """, (user_id,))
             return self._rows_to_list(cursor.fetchall())
@@ -612,9 +668,10 @@ class UserMixin:
                 UPDATE user_tags SET removed_at = datetime('now')
                 WHERE user_id = ? AND tag = ? AND removed_at IS NULL
             """, (user_id, tag))
+            rc = cursor.rowcount
             self._log_audit(cursor, user_id, 'tag_removed', actor_type, actor_id, {'tag': tag})
             conn.commit()
-            if cursor.rowcount > 0:
+            if rc > 0:
                 emit('tag.removed', {'user_id': user_id, 'tag': tag})
                 return True
         return False

@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>User Directory</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: #f5f5f5; color: #333; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  h1 { margin: 0 0 20px 0; font-size: 24px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+  .tab { padding: 10px 24px; cursor: pointer; background: #e0e0e0; border: none; border-radius: 6px 6px 0 0; font-size: 14px; font-weight: 500; }
+  .tab.active { background: #fff; color: #1976d2; border-bottom: 2px solid #1976d2; }
+  .tab-content { background: #fff; border-radius: 0 8px 8px 8px; padding: 24px; min-height: 400px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+  .search-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+  .search-bar input { flex: 1; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+  .search-bar button { padding: 8px 16px; background: #1976d2; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; font-size: 13px; }
+  th { background: #fafafa; font-weight: 600; }
+  tr:hover { background: #f0f7ff; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge-green { background: #e8f5e9; color: #2e7d32; }
+  .badge-red { background: #fbe9e7; color: #c62828; }
+  .badge-orange { background: #fff3e0; color: #e65100; }
+  .badge-gray { background: #f5f5f5; color: #616161; }
+  .badge-blue { background: #e3f2fd; color: #1565c0; }
+  .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); z-index: 100; }
+  .modal-content { background: #fff; margin: 5% auto; padding: 24px; width: 90%; max-width: 600px; border-radius: 8px; max-height: 80vh; overflow-y: auto; }
+  .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .modal-header h2 { margin: 0; font-size: 18px; }
+  .close { font-size: 24px; cursor: pointer; color: #999; }
+  .close:hover { color: #333; }
+  .form-group { margin-bottom: 12px; }
+  .form-group label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+  .form-group textarea { resize: vertical; min-height: 60px; }
+  .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  .btn-primary { background: #1976d2; color: #fff; }
+  .btn-danger { background: #d32f2f; color: #fff; }
+  .btn-outline { background: #fff; border: 1px solid #ccc; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  .tag-list { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag-item { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; background: #e3f2fd; border-radius: 10px; font-size: 11px; }
+  .tag-item .remove { cursor: pointer; color: #999; font-weight: bold; }
+  .tag-item .remove:hover { color: #c62828; }
+  .pagination { display: flex; gap: 4px; margin-top: 16px; justify-content: center; }
+  .pagination button { padding: 6px 12px; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; }
+  .pagination button.active { background: #1976d2; color: #fff; border-color: #1976d2; }
+  .detail-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .detail-section { margin-bottom: 16px; }
+  .detail-section h3 { font-size: 14px; margin: 0 0 8px 0; border-bottom: 1px solid #eee; padding-bottom: 4px; }
+  .detail-row { display: flex; padding: 4px 0; font-size: 13px; }
+  .detail-label { width: 120px; color: #666; font-weight: 600; }
+  .detail-value { flex: 1; }
+  .toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 20px; background: #333; color: #fff; border-radius: 6px; font-size: 13px; z-index: 200; opacity: 0; transition: opacity 0.3s; }
+  .toast.show { opacity: 1; }
+  .toast.error { background: #c62828; }
+  .toast.success { background: #2e7d32; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>User Directory</h1>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('users')">Users</button>
+    <button class="tab" onclick="switchTab('groups')">Groups</button>
+  </div>
+
+  <div class="tab-content">
+    <!-- Users Tab -->
+    <div id="tab-users" class="tab-pane active">
+      <div class="search-bar">
+        <input type="text" id="user-search" placeholder="Search by name or notes..." onkeyup="searchUsers()">
+        <button onclick="showCreateUserModal()">+ New User</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Tags</th>
+            <th>Groups</th>
+            <th>Last Active</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="user-table-body"></tbody>
+      </table>
+      <div class="pagination" id="user-pagination"></div>
+    </div>
+
+    <!-- Groups Tab -->
+    <div id="tab-groups" class="tab-pane">
+      <div class="search-bar">
+        <button onclick="showCreateGroupModal()">+ New Group</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Description</th>
+            <th>Members</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="group-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- User Detail Modal -->
+<div id="user-modal" class="modal">
+  <div class="modal-content" style="max-width: 800px;">
+    <div class="modal-header">
+      <h2 id="user-modal-title">User Detail</h2>
+      <span class="close" onclick="closeModal('user-modal')">&times;</span>
+    </div>
+    <div class="detail-panel">
+      <div class="detail-section">
+        <h3>Profile</h3>
+        <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value" id="detail-id"></span></div>
+        <div class="detail-row"><span class="detail-label">Name</span><span class="detail-value" id="detail-name"></span></div>
+        <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value" id="detail-status"></span></div>
+        <div class="detail-row"><span class="detail-label">Notes</span><span class="detail-value" id="detail-notes"></span></div>
+        <div class="detail-row"><span class="detail-label">ERP Sync</span><span class="detail-value" id="detail-erp"></span></div>
+        <div class="detail-row"><span class="detail-label">Created</span><span class="detail-value" id="detail-created"></span></div>
+        <div class="detail-row"><span class="detail-label">Last Active</span><span class="detail-value" id="detail-active"></span></div>
+        <div class="form-group" style="margin-top: 12px;">
+          <button class="btn btn-primary btn-sm" onclick="editUser()">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="blockUser()">Block</button>
+          <button class="btn btn-outline btn-sm" onclick="showHardDeleteConfirm()">Hard Delete</button>
+        </div>
+      </div>
+      <div>
+        <div class="detail-section">
+          <h3>Tags</h3>
+          <div id="detail-tags" class="tag-list"></div>
+          <div class="form-group" style="margin-top: 8px;">
+            <input type="text" id="new-tag-input" placeholder="Add tag..." style="width: auto; display: inline-block;">
+            <button class="btn btn-primary btn-sm" onclick="addTag()">Add</button>
+          </div>
+        </div>
+        <div class="detail-section">
+          <h3>Contacts</h3>
+          <table id="detail-contacts-table" style="font-size: 12px;">
+            <thead><tr><th>Type</th><th>Value</th><th>Primary</th><th>Actions</th></tr></thead>
+            <tbody id="detail-contacts-body"></tbody>
+          </table>
+          <div class="form-group" style="margin-top: 8px;">
+            <select id="new-contact-type" style="width: auto; display: inline-block;">
+              <option value="whatsapp">WhatsApp</option>
+              <option value="telegram">Telegram</option>
+              <option value="email">Email</option>
+            </select>
+            <input type="text" id="new-contact-value" placeholder="Value..." style="width: auto; display: inline-block;">
+            <button class="btn btn-primary btn-sm" onclick="addContact()">Add</button>
+          </div>
+        </div>
+        <div class="detail-section">
+          <h3>Audit Log</h3>
+          <div id="detail-audit" style="max-height: 150px; overflow-y: auto; font-size: 12px;"></div>
+        </div>
+        <div class="detail-section">
+          <h3>Danger Zone</h3>
+          <button class="btn btn-danger btn-sm" onclick="mergeUser()">Merge Into Another User</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit User Modal -->
+<div id="edit-user-modal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>Edit User</h2>
+      <span class="close" onclick="closeModal('edit-user-modal')">&times;</span>
+    </div>
+    <div class="form-group"><label>Name</label><input type="text" id="edit-name"></div>
+    <div class="form-group"><label>Notes</label><textarea id="edit-notes"></textarea></div>
+    <div class="form-group"><label>ERP Sync Enabled</label><select id="edit-erp"><option value="1">Yes</option><option value="0">No</option></select></div>
+    <button class="btn btn-primary" onclick="saveEditUser()">Save</button>
+  </div>
+</div>
+
+<!-- Create User Modal -->
+<div id="create-user-modal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>Create User</h2>
+      <span class="close" onclick="closeModal('create-user-modal')">&times;</span>
+    </div>
+    <div class="form-group"><label>Name</label><input type="text" id="create-name"></div>
+    <div class="form-group"><label>Notes</label><textarea id="create-notes"></textarea></div>
+    <button class="btn btn-primary" onclick="createUser()">Create</button>
+  </div>
+</div>
+
+<!-- Create Group Modal -->
+<div id="create-group-modal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>Create Group</h2>
+      <span class="close" onclick="closeModal('create-group-modal')">&times;</span>
+    </div>
+    <div class="form-group"><label>Name</label><input type="text" id="create-group-name"></div>
+    <div class="form-group"><label>Description</label><textarea id="create-group-desc"></textarea></div>
+    <button class="btn btn-primary" onclick="createGroup()">Create</button>
+  </div>
+</div>
+
+<!-- Hard Delete Confirm -->
+<div id="hard-delete-modal" class="modal">
+  <div class="modal-content" style="max-width: 400px;">
+    <div class="modal-header">
+      <h2>Confirm Hard Delete</h2>
+      <span class="close" onclick="closeModal('hard-delete-modal')">&times;</span>
+    </div>
+    <p style="color: #c62828;">This will permanently pseudonymize this user (GDPR). Cannot be undone.</p>
+    <button class="btn btn-danger" onclick="hardDeleteUser()">Confirm Hard Delete</button>
+  </div>
+</div>
+
+<!-- Merge User Modal -->
+<div id="merge-user-modal" class="modal">
+  <div class="modal-content" style="max-width: 400px;">
+    <div class="modal-header">
+      <h2>Merge User</h2>
+      <span class="close" onclick="closeModal('merge-user-modal')">&times;</span>
+    </div>
+    <div class="form-group"><label>Target User ID</label><input type="text" id="merge-target-id"></div>
+    <p style="font-size: 12px; color: #666;">This user will be merged INTO the target. Source will be soft-deleted.</p>
+    <button class="btn btn-danger" onclick="confirmMergeUser()">Merge</button>
+  </div>
+</div>
+
+<!-- Group Detail Modal -->
+<div id="group-modal" class="modal">
+  <div class="modal-content" style="max-width: 600px;">
+    <div class="modal-header">
+      <h2 id="group-modal-title">Group Detail</h2>
+      <span class="close" onclick="closeModal('group-modal')">&times;</span>
+    </div>
+    <div id="group-detail-content"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+let currentUserId = null;
+let currentGroupId = null;
+let usersOffset = 0;
+const USERS_LIMIT = 20;
+
+function toast(msg, type='info') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + (type === 'error' ? 'error' : type === 'success' ? 'success' : '');
+  setTimeout(() => t.className = 'toast', 3000);
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.querySelector(`.tab[onclick*="${name}"]`).classList.add('active');
+  if (name === 'groups') loadGroups();
+  else loadUsers();
+}
+
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+function showModal(id) { document.getElementById(id).style.display = 'block'; }
+
+async function api(method, path, body=null) {
+  const opts = { method, headers: {'Content-Type': 'application/json'} };
+  if (body !== null) opts.body = JSON.stringify(body);
+  const res = await fetch(path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+// ---- Users ----
+
+let searchTimer = null;
+function searchUsers() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { usersOffset = 0; loadUsers(); }, 300);
+}
+
+async function loadUsers() {
+  const q = document.getElementById('user-search').value;
+  const url = `/api/user-directory/users?q=${encodeURIComponent(q)}&limit=${USERS_LIMIT}&offset=${usersOffset}`;
+  try {
+    const data = await api('GET', url);
+    const tbody = document.getElementById('user-table-body');
+    tbody.innerHTML = '';
+    data.users.forEach(u => {
+      const status = u.is_approved === 2 ? 'Blocked' : u.is_approved === 1 ? 'Approved' : 'Pending';
+      const sClass = u.is_approved === 2 ? 'badge-red' : u.is_approved === 1 ? 'badge-green' : 'badge-orange';
+      const tr = document.createElement('tr');
+      tr.style.cursor = 'pointer';
+      tr.onclick = () => showUserDetail(u.id);
+      tr.innerHTML = `<td>${u.id}</td><td>${u.name}</td><td><span class="badge ${sClass}">${status}</span></td><td><div class="tag-list">${(u.tags || []).map(t => `<span class="badge badge-blue">${t}</span>`).join('')}</div></td><td>${u.group_count || 0}</td><td>${u.last_active_at ? new Date(u.last_active_at).toLocaleString() : '-'}</td><td><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();showUserDetail('${u.id}')">View</button></td>`;
+      tbody.appendChild(tr);
+    });
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function showUserDetail(id) {
+  currentUserId = id;
+  try {
+    const data = await api('GET', `/api/user-directory/users/${id}`);
+    const u = data.user;
+    document.getElementById('detail-id').textContent = u.id;
+    document.getElementById('detail-name').textContent = u.name;
+    const status = u.is_approved === 2 ? 'Blocked' : u.is_approved === 1 ? 'Approved' : 'Pending';
+    document.getElementById('detail-status').textContent = status;
+    document.getElementById('detail-notes').textContent = u.notes || '-';
+    document.getElementById('detail-erp').textContent = u.erp_sync_enabled ? 'Enabled' : 'Disabled';
+    document.getElementById('detail-created').textContent = u.created_at ? new Date(u.created_at).toLocaleString() : '-';
+    document.getElementById('detail-active').textContent = u.last_active_at ? new Date(u.last_active_at).toLocaleString() : '-';
+    document.getElementById('user-modal-title').textContent = `User: ${u.name}`;
+    showModal('user-modal');
+
+    // Load tags
+    loadUserTags(id);
+    // Load contacts
+    loadUserContacts(id);
+    // Load audit
+    loadUserAudit(id);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function loadUserTags(id) {
+  try {
+    const data = await api('GET', `/api/user-directory/users/${id}/tags`);
+    const container = document.getElementById('detail-tags');
+    container.innerHTML = data.tags.map(t => `<span class="tag-item">${t} <span class="remove" onclick="removeTag('${t}')">&times;</span></span>`).join('');
+  } catch(e) { /* ignore */ }
+}
+
+async function addTag() {
+  const input = document.getElementById('new-tag-input');
+  const tag = input.value.trim();
+  if (!tag) return;
+  try {
+    await api('POST', `/api/user-directory/users/${currentUserId}/tags`, {tag});
+    input.value = '';
+    loadUserTags(currentUserId);
+    toast('Tag added', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function removeTag(tag) {
+  try {
+    await api('DELETE', `/api/user-directory/users/${currentUserId}/tags/${encodeURIComponent(tag)}`);
+    loadUserTags(currentUserId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function loadUserContacts(id) {
+  try {
+    const data = await api('GET', `/api/user-directory/users/${id}/contacts`);
+    const tbody = document.getElementById('detail-contacts-body');
+    tbody.innerHTML = '';
+    data.contacts.forEach(c => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${c.channel_type}</td><td>${c.value}</td><td>${c.is_primary ? 'Y' : '-'}</td><td><button class="btn btn-outline btn-sm" onclick="setPrimary(${c.id})">Set Primary</button> <button class="btn btn-outline btn-sm" onclick="deleteContact(${c.id})">Delete</button></td>`;
+      tbody.appendChild(tr);
+    });
+  } catch(e) { /* ignore */ }
+}
+
+async function addContact() {
+  const type = document.getElementById('new-contact-type').value;
+  const value = document.getElementById('new-contact-value').value.trim();
+  if (!value) return;
+  try {
+    await api('POST', `/api/user-directory/users/${currentUserId}/contacts`, {channel_type: type, external_user_id: value, value});
+    document.getElementById('new-contact-value').value = '';
+    loadUserContacts(currentUserId);
+    toast('Contact added', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function setPrimary(contactId) {
+  try {
+    await api('POST', `/api/user-directory/users/${currentUserId}/contacts/${contactId}/primary`);
+    loadUserContacts(currentUserId);
+    toast('Primary set', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteContact(contactId) {
+  try {
+    await api('DELETE', `/api/user-directory/users/${currentUserId}/contacts/${contactId}`);
+    loadUserContacts(currentUserId);
+    toast('Contact deleted', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function loadUserAudit(id) {
+  try {
+    const data = await api('GET', `/api/user-directory/users/${id}/audit`);
+    const container = document.getElementById('detail-audit');
+    container.innerHTML = data.logs.slice(0, 20).map(l => `<div style="padding: 2px 0; border-bottom: 1px solid #f0f0f0;">${l.created_at || ''} <strong>${l.action}</strong> ${l.details ? JSON.stringify(l.details) : ''}</div>`).join('');
+  } catch(e) { /* ignore */ }
+}
+
+function editUser() {
+  closeModal('user-modal');
+  document.getElementById('edit-name').value = document.getElementById('detail-name').textContent;
+  document.getElementById('edit-notes').value = document.getElementById('detail-notes').textContent === '-' ? '' : document.getElementById('detail-notes').textContent;
+  document.getElementById('edit-erp').value = document.getElementById('detail-erp').textContent === 'Enabled' ? '1' : '0';
+  showModal('edit-user-modal');
+}
+
+async function saveEditUser() {
+  const updates = {
+    name: document.getElementById('edit-name').value,
+    notes: document.getElementById('edit-notes').value,
+    erp_sync_enabled: parseInt(document.getElementById('edit-erp').value),
+  };
+  try {
+    await api('PUT', `/api/user-directory/users/${currentUserId}`, updates);
+    closeModal('edit-user-modal');
+    showUserDetail(currentUserId);
+    loadUsers();
+    toast('User updated', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function blockUser() {
+  try {
+    const user = await api('GET', `/api/user-directory/users/${currentUserId}`);
+    const isBlocked = user.user.is_approved === 2;
+    await api('POST', `/api/user-directory/users/${currentUserId}/block`, {blocked: !isBlocked});
+    showUserDetail(currentUserId);
+    loadUsers();
+    toast(isBlocked ? 'User unblocked' : 'User blocked', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function showHardDeleteConfirm() {
+  closeModal('user-modal');
+  showModal('hard-delete-modal');
+}
+
+async function hardDeleteUser() {
+  try {
+    await api('POST', `/api/user-directory/users/${currentUserId}/hard-delete`);
+    closeModal('hard-delete-modal');
+    currentUserId = null;
+    loadUsers();
+    toast('User hard deleted (pseudonymized)', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function mergeUser() {
+  closeModal('user-modal');
+  showModal('merge-user-modal');
+}
+
+async function confirmMergeUser() {
+  const target = document.getElementById('merge-target-id').value.trim();
+  if (!target) { toast('Target ID required', 'error'); return; }
+  try {
+    await api('POST', `/api/user-directory/users/merge`, {source_id: currentUserId, target_id: target});
+    closeModal('merge-user-modal');
+    currentUserId = null;
+    loadUsers();
+    toast('Users merged', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function showCreateUserModal() { showModal('create-user-modal'); }
+async function createUser() {
+  const name = document.getElementById('create-name').value.trim();
+  if (!name) { toast('Name required', 'error'); return; }
+  try {
+    await api('POST', '/api/user-directory/users', {name, notes: document.getElementById('create-notes').value});
+    document.getElementById('create-name').value = '';
+    document.getElementById('create-notes').value = '';
+    closeModal('create-user-modal');
+    loadUsers();
+    toast('User created', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ---- Groups ----
+
+async function loadGroups() {
+  try {
+    const data = await api('GET', '/api/user-directory/groups');
+    const tbody = document.getElementById('group-table-body');
+    tbody.innerHTML = '';
+    data.groups.forEach(g => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${g.id}</td><td>${g.name}</td><td>${g.description || '-'}</td><td>${g.member_count || 0}</td><td><button class="btn btn-outline btn-sm" onclick="showGroupDetail('${g.id}')">Manage</button> <button class="btn btn-outline btn-sm" onclick="deleteGroup('${g.id}')">Delete</button></td>`;
+      tbody.appendChild(tr);
+    });
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function showGroupDetail(id) {
+  currentGroupId = id;
+  try {
+    const data = await api('GET', `/api/user-directory/groups/${id}`);
+    const g = data.group;
+    const [users, agents] = g.members || [[], []];
+    document.getElementById('group-modal-title').textContent = `Group: ${g.name}`;
+    document.getElementById('group-detail-content').innerHTML = `
+      <p><strong>ID:</strong> ${g.id}</p>
+      <p><strong>Name:</strong> ${g.name}</p>
+      <p><strong>Description:</strong> ${g.description || '-'}</p>
+      <h3 style="font-size:14px;margin:12px 0 8px;">Users (${users.length})</h3>
+      <div>${users.map(u => `<span class="badge badge-blue">${u.name || u.member_id}</span> `).join('')}</div>
+      <h3 style="font-size:14px;margin:12px 0 8px;">Agents (${agents.length})</h3>
+      <div>${agents.map(a => `<span class="badge badge-green">${a.name || a.member_id}</span> `).join('')}</div>
+    `;
+    showModal('group-modal');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function showCreateGroupModal() { showModal('create-group-modal'); }
+
+async function createGroup() {
+  const name = document.getElementById('create-group-name').value.trim();
+  if (!name) { toast('Name required', 'error'); return; }
+  try {
+    await api('POST', '/api/user-directory/groups', {name, description: document.getElementById('create-group-desc').value});
+    document.getElementById('create-group-name').value = '';
+    document.getElementById('create-group-desc').value = '';
+    closeModal('create-group-modal');
+    loadGroups();
+    toast('Group created', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteGroup(id) {
+  if (!confirm('Delete this group?')) return;
+  try {
+    await api('DELETE', `/api/user-directory/groups/${id}`);
+    loadGroups();
+    toast('Group deleted', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// Init
+loadUsers();
+</script>
+</body>
+</html>
