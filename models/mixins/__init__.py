@@ -12,6 +12,7 @@ from models.mixins.workplaces import WorkplaceMixin
 from models.mixins.portals import PortalMixin
 from models.mixins.safety_rules import SafetyRuleMixin
 from models.mixins.attachments import AttachmentsMixin
+from models.mixins.users import UserMixin
 
 __all__ = [
     'EvaluationMixin',
@@ -28,4 +29,5 @@ __all__ = [
     'PortalMixin',
     'SafetyRuleMixin',
     'AttachmentsMixin',
+    'UserMixin',
 ]

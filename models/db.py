@@ -20,10 +20,12 @@ from models.mixins import (
     PortalMixin,
     SafetyRuleMixin,
     AttachmentsMixin,
+    UserMixin,
 )
 
 
 class Database(
+    UserMixin,
     SchemaMixin,
     EvaluationMixin,
     TestingMixin,
