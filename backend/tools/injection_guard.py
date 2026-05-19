@@ -316,12 +316,12 @@ _RULES: list[tuple] = [
     (
         "spaced_character_evasion",
         _r(
-            r"\b("
-            r"i\s*g\s*n\s*o\s*r\s*e|"
-            r"b\s*y\s*p\s*a\s*s\s*s|"
-            r"j\s*a\s*i\s*l\s*b\s*r\s*e\s*a\s*k|"
-            r"o\s*v\s*e\s*r\s*r\s*i\s*d\s*e"
-            r")\b"
+            r"("
+            r"i\s+g\s*n\s*o\s*r\s*e|"
+            r"b\s+y\s*p\s*a\s*s\s*s|"
+            r"j\s+a\s*i\s*l\s*b\s*r\s*e\s*a\s*k|"
+            r"o\s+v\s*e\s*r\s*r\s*i\s*d\s*e"
+            r")"
         ),
         HIGH,
         "Obfuscation",
