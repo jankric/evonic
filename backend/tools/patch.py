@@ -23,6 +23,16 @@ def _unescape_llm(s: str) -> str:
     return s.replace('\\"', '"').replace("\\'", "'")
 
 
+def _normalize_for_match(s: str) -> str:
+    """Normalize a string for fuzzy matching.
+
+    Handles LLM double-escaping AND JSON unicode escapes (\\uXXXX → char),
+    so that e.g. ``\\u2192`` in the file matches ``→`` in the patch.
+    """
+    s = _unescape_llm(s)
+    return re.sub(r'\\u([0-9a-fA-F]{4})', lambda m: chr(int(m.group(1), 16)), s)
+
+
 # ---------------------------------------------------------------------------
 # Patch parser
 # ---------------------------------------------------------------------------
@@ -188,14 +198,15 @@ def _find_hunk_pos(lines: list, hunk_lines: list, stated_pos: int,
         ):
             return (pos, None)
 
-    # --- Tier 4: unescape-tolerant match (LLM double-escaping) ---
-    # LLMs sometimes emit \" or \' in patch context when the file has " or '.
-    match_unesc = [_unescape_llm(txt).rstrip() for _, txt in to_match]
-    if match_unesc != [txt.rstrip() for _, txt in to_match]:
-        lines_rstripped = [l.rstrip('\r\n').rstrip() for l in lines]
-        for pos in range(len(lines_rstripped) - match_len + 1):
+    # --- Tier 4: normalize-tolerant match (LLM double-escaping + \uXXXX) ---
+    # Handles: \" vs ", \' vs ', \u2192 vs → (either side may have either form)
+    match_norm = [_normalize_for_match(txt).rstrip() for _, txt in to_match]
+    lines_norm = [_normalize_for_match(l.rstrip('\r\n')).rstrip() for l in lines]
+    if (match_norm != [txt.rstrip() for _, txt in to_match] or
+            lines_norm != [l.rstrip('\r\n').rstrip() for l in lines]):
+        for pos in range(len(lines_norm) - match_len + 1):
             if all(
-                lines_rstripped[pos + i] == match_unesc[i]
+                lines_norm[pos + i] == match_norm[i]
                 for i in range(match_len)
             ):
                 return (pos, 'unescape')
@@ -755,6 +766,16 @@ def test_execute():
     r = apply_hunks(tmp, '@@ -1,3 +1,3 @@\n def bar():\n-    \\"\\"\\"Old doc.\\"\\"\\"\n+    \\"\\"\\"New doc.\\"\\"\\"\n     pass\n')
     assert r['result'] == 'success', r
     assert '"""New doc."""' in read_file(tmp)  # unescaped in output
+    passed += 1
+
+    print('Test 15: JSON \\uXXXX in file vs decoded char in patch')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write('{\n  "label": "Model \\u2192 Mapping",\n  "value": 1\n}\n')
+    r = apply_hunks(tmp, '@@ -1,4 +1,4 @@\n {\n   "label": "Model \u2192 Mapping",\n-  "value": 1\n+  "value": 2\n }\n')
+    assert r['result'] == 'success', r
+    content = read_file(tmp)
+    assert '"value": 2' in content
+    assert '\\u2192' in content  # file's original escape preserved
     passed += 1
 
     os.unlink(tmp)
