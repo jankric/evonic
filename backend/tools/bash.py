@@ -39,10 +39,14 @@ def execute(agent: dict, args: dict) -> dict:
     lr = check_long_running(script)
     if lr:
         return {
-            'error': 'Long-running command detected',
+            'error': (
+                f"Long-running command detected: {lr['matched_command']}. "
+                f"This command may exceed the bash timeout. "
+                f"Run it in a background session instead by executing the `run_script` below, "
+                f"then use `monitor_script` to watch output and `check_status_script` to check completion."
+            ),
             'level': 'long_running',
             'matched_command': lr['matched_command'],
-            'suggestion': lr['suggestion'],
             'run_script': lr['run_script'],
             'log_file': lr['log_file'],
             'monitor_script': lr['monitor_script'],
