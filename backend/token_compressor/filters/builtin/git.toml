@@ -91,7 +91,7 @@ command = "git add"
 description = "Git add output"
 strip_ansi = true
 match_output = [
-    { pattern = '.*', message = "Files staged" },
+    { pattern = '.+', message = "Files staged" },
 ]
 on_empty = "No files staged"
 

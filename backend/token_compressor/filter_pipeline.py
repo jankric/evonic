@@ -222,20 +222,30 @@ def _stage_max_lines(text: str, flt: CompiledFilter) -> str:
 
     # Use filter's head_lines / tail_lines for the split, with sensible
     # defaults when not configured.
-    head_n = flt.head_lines if flt.head_lines is not None else max(1, limit // 2)
-    tail_n = flt.tail_lines if flt.tail_lines is not None else max(1, limit // 3)
+    head_n: int = flt.head_lines if flt.head_lines is not None else max(1, limit // 2)
+    tail_n: int = flt.tail_lines if flt.tail_lines is not None else max(1, limit // 3)
 
-    # Ensure head + tail + 1 (skip line) <= limit
-    if head_n + tail_n + 1 > limit:
-        head_n = max(1, (limit - 1) // 2)
-        tail_n = limit - head_n - 1
+    # Honour explicit zero: head=0 means no head, tail=0 means no tail.
+    has_skip = (head_n > 0 and tail_n > 0 and head_n + tail_n < total)
+    skip_lines = 1 if has_skip else 0
+
+    # Ensure head + tail + skip <= limit
+    if head_n + tail_n + skip_lines > limit:
+        if head_n == 0:
+            tail_n = limit - skip_lines
+        elif tail_n == 0:
+            head_n = limit - skip_lines
+        else:
+            head_n = max(1, (limit - skip_lines) // 2)
+            tail_n = limit - head_n - skip_lines
+        has_skip = (head_n > 0 and tail_n > 0 and head_n + tail_n < total)
 
     skipped = total - head_n - tail_n
-    head_part = lines[:head_n]
+    head_part = lines[:head_n] if head_n > 0 else []
     tail_part = lines[-tail_n:] if tail_n > 0 else []
 
     result = list(head_part)
-    if skipped > 0:
+    if skipped > 0 and has_skip:
         result.append(f"...[{skipped} lines skipped]...")
     result.extend(tail_part)
 

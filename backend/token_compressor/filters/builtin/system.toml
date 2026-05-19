@@ -21,7 +21,7 @@ command = "ls -la"
 description = "ls -la output"
 strip_ansi = true
 replace = [
-    { pattern = '^\S+\s+\d+\s+\S+\s+\S+\s+(\d+)\s+\S+\s+\d+\s+\S+\s+(.+)$', replacement = '\\1 \\2' },
+    { pattern = '^\S+\s+\d+\s+\S+\s+\S+\s+(\d+)\s+.+\s(.+)$', replacement = '\1 \2' },
 ]
 strip_lines = [
     '^total ',
