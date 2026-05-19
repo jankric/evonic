@@ -7,7 +7,7 @@ import re
 import json
 import uuid
 import queue
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from flask import Blueprint, render_template, jsonify, request, Response, stream_with_context
 from models.db import db
 from models.chatlog import chatlog_manager, _DISPLAY_TYPES
@@ -16,6 +16,32 @@ from backend.tools import tool_registry
 agents_bp = Blueprint('agents', __name__)
 
 _SENSITIVE_AGENT_KEYS = frozenset({'workspace'})
+
+_NOTES_MD_TEMPLATE = """# Notes.md -- User Preferences & Instructions
+
+This file stores your user's personal preferences, tastes, language
+preferences, and communication style instructions.
+
+## What to store here
+
+- User's preferred language (e.g. "User prefers Bahasa Indonesia")
+- Communication style preferences (e.g. "User likes concise answers",
+  "User dislikes emoji")
+- Personal instructions (e.g. "Call the user 'Pak'")
+- Tastes and preferences (e.g. "User prefers bullet points over paragraphs")
+
+## What NOT to store here (use `remember` instead)
+
+- Factual/memorization data: addresses, phone numbers, email, birthday
+- Secret/sensitive data: passwords, tokens, PINs, secret codes, bank accounts
+
+## Usage
+
+- Read this file: read("notes.md")
+- Update via write_file with path /_self/kb/notes.md
+- Update immediately when the user gives a new preference
+- Prioritize notes.md over `remember` for non-factual preference information
+"""
 
 
 def _sanitize_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
@@ -29,6 +55,15 @@ def _sanitize_agents(agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for a in agents:
         _sanitize_agent(a)
     return agents
+
+
+def _apply_sandbox_workplace_policy(agent_data: dict, workplace_id: Optional[str]) -> None:
+    """Docker sandbox is only supported on local workplaces."""
+    if not workplace_id:
+        return
+    workplace = db.get_workplace(workplace_id)
+    if workplace and workplace.get('type') in ('remote', 'cloud'):
+        agent_data['sandbox_enabled'] = 0
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AGENTS_DIR = os.path.join(BASE_DIR, 'agents')
@@ -177,11 +212,7 @@ def api_create_agent():
         return jsonify({'error': 'Description too long (max 2000 characters).'}), 400
     if len(data.get('system_prompt', '')) > 102400:
         return jsonify({'error': 'System prompt too long (max 100 KB).'}), 400
-    # Docker Sandbox only available for local workplace mode
-    if data.get('sandbox_enabled') and data.get('workplace_id'):
-        workplace = db.get_workplace(data['workplace_id'])
-        if workplace and workplace.get('type') in ('remote', 'cloud'):
-            data['sandbox_enabled'] = 0
+    _apply_sandbox_workplace_policy(data, data.get('workplace_id'))
     try:
         _ensure_kb_dir(agent_id)
         # Set default workspace for regular agents to shared/agents/[agent-id]
@@ -191,6 +222,18 @@ def api_create_agent():
         # Create workspace directory if it does not already exist
         os.makedirs(data['workspace'], exist_ok=True)
         _write_system_prompt(agent_id, data.get('system_prompt', ''))
+        # Create artifacts directory
+        _artifacts_dir(agent_id)
+        # Inject artifacts instructions into SYSTEM.md if enabled
+        artifacts_enabled = data.get('artifacts_enabled')
+        if artifacts_enabled is None or artifacts_enabled:
+            _ensure_artifacts_prompt(agent_id, True)
+            db.add_agent_tool(agent_id, 'save_artifact')
+        # Create notes.md template if it does not already exist
+        _notes_md = os.path.join(_kb_dir(agent_id), 'notes.md')
+        if not os.path.isfile(_notes_md):
+            with open(_notes_md, 'w', encoding='utf-8') as _f:
+                _f.write(_NOTES_MD_TEMPLATE)
         agent = db.get_agent(agent_id)
         agent['system_prompt'] = _read_system_prompt(agent_id, fallback=agent.get('system_prompt', ''))
         return jsonify({'success': True, 'agent': _sanitize_agent(agent)})
@@ -207,14 +250,20 @@ def api_update_agent(agent_id):
     # Super agent cannot be disabled
     if existing.get('is_super') and data.get('enabled') is False:
         return jsonify({'error': 'Super agent cannot be disabled.'}), 403
-    # Docker Sandbox only available for local workplace mode
     target_workplace_id = data.get('workplace_id', existing.get('workplace_id'))
-    if data.get('sandbox_enabled') and target_workplace_id:
-        workplace = db.get_workplace(target_workplace_id)
-        if workplace and workplace.get('type') in ('remote', 'cloud'):
-            del data['sandbox_enabled']  # Do not overwrite existing value in database
+    _apply_sandbox_workplace_policy(data, target_workplace_id)
     if 'system_prompt' in data:
         _write_system_prompt(agent_id, data['system_prompt'])
+    # Handle artifacts_enabled toggle: inject/remove SYSTEM.md instructions
+    if 'artifacts_enabled' in data:
+        old_artifacts = existing.get('artifacts_enabled', True) if existing.get('artifacts_enabled') is not None else True
+        new_artifacts = bool(data['artifacts_enabled'])
+        if new_artifacts != old_artifacts:
+            _ensure_artifacts_prompt(agent_id, new_artifacts)
+            if new_artifacts:
+                db.add_agent_tool(agent_id, 'save_artifact')
+            else:
+                db.remove_agent_tool(agent_id, 'save_artifact')
     db.update_agent(agent_id, data)
     agent = db.get_agent(agent_id)
     agent['system_prompt'] = _read_system_prompt(agent_id, fallback=agent.get('system_prompt', ''))
@@ -447,6 +496,184 @@ def api_delete_kb_file(agent_id, filename):
         return jsonify({'error': 'File not found'}), 404
     os.remove(fpath)
     return jsonify({'success': True})
+
+
+def _artifacts_dir(agent_id: str) -> str:
+    d = os.path.join(WORKSPACE_DIR, agent_id, 'artifacts')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+_ARTIFACT_PROMPT_TEMPLATE = """
+## Artifacts Feature
+
+You have an **Artifacts** feature that allows you to save files you produce during your work. Files are stored in your dedicated artifacts directory and are accessible via the web UI.
+
+### Using save_artifact Tool
+
+Use the **save_artifact** tool to save files:
+- `filename`: the name of the file (e.g. 'report.md', 'analysis.txt', 'output.json')
+- `content`: the text content of the file (or base64-encoded content for binary files)
+- `mime_type`: optional MIME type hint
+- `mode`: set to 'text' (default) for text files, or 'base64' for binary files (PDFs, images, etc.)
+
+When to use this tool:
+- After completing analysis or research, save the findings as a report
+- After generating code, configuration, or any output, save it as an artifact
+- After creating images, PDFs, or markdown documents
+- Any time you produce a file that the user or other agents may want to reference later
+- For binary files (PDFs, images), set `mode: "base64"` and provide base64-encoded content
+
+### Alternative: Using write_file or bash/runpy
+
+You can also save files directly to your artifacts directory using:
+- `write_file` with path starting with `/workspace/shared/agents/<YOUR_AGENT_ID>/artifacts/<filename>`
+- bash/runpy by writing files to the same directory path
+
+This is particularly useful for binary files (PDFs, images) that you generate via Python scripts.
+
+The files are stored in your dedicated artifacts directory and can be browsed and downloaded from the agent detail page in the Artifacts tab.
+"""
+
+
+def _ensure_artifacts_prompt(agent_id: str, enabled: bool):
+    """Inject or remove the Artifacts instructions from the agent's SYSTEM.md."""
+    path = _system_prompt_path(agent_id)
+    prompt_text = _ARTIFACT_PROMPT_TEMPLATE.strip()
+
+    if not os.path.isfile(path):
+        return
+
+    with open(path, 'r', encoding='utf-8') as f:
+        sp = f.read()
+
+    if enabled:
+        # Inject if not already present
+        if prompt_text not in sp:
+            sp = sp.rstrip() + '\n\n' + prompt_text + '\n'
+            _write_system_prompt(agent_id, sp)
+    else:
+        # Remove if present
+        if prompt_text in sp:
+            sp = sp.replace(prompt_text, '').strip()
+            _write_system_prompt(agent_id, sp)
+
+
+# ==================== Agent Artifacts API ====================
+
+
+@agents_bp.route('/api/agents/<agent_id>/artifacts', methods=['GET'])
+def api_list_artifacts(agent_id):
+    if not db.get_agent(agent_id):
+        return jsonify({'error': 'Agent not found'}), 404
+    artifacts_dir = _artifacts_dir(agent_id)
+    if not os.path.isdir(artifacts_dir):
+        return jsonify({'files': []})
+    
+    sort_param = request.args.get('sort', 'newest')
+    query = (request.args.get('q', '') or '').strip().lower()
+    type_filter = (request.args.get('type', '') or '').strip().lower()
+    
+    # File type category detection
+    def _get_file_category(fname):
+        ext = os.path.splitext(fname)[1].lower()
+        if ext in ('.md', '.pdf'):
+            return 'document'
+        if ext in ('.txt', '.csv', '.json', '.yaml', '.yml', '.xml', '.log'):
+            return 'text'
+        if ext in ('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico'):
+            return 'image'
+        if ext in ('.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a', '.wma'):
+            return 'sound'
+        if ext in ('.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v'):
+            return 'video'
+        return 'data'
+    
+    files = []
+    for fname in sorted(os.listdir(artifacts_dir)):
+        fpath = os.path.join(artifacts_dir, fname)
+        if not os.path.isfile(fpath):
+            continue
+        
+        # Apply search filter
+        if query and query not in fname.lower():
+            continue
+        
+        # Apply type filter
+        cat = _get_file_category(fname)
+        if type_filter and type_filter != 'all' and cat != type_filter:
+            continue
+        
+        stat = os.stat(fpath)
+        files.append({
+            'filename': fname,
+            'size': stat.st_size,
+            'modified': stat.st_mtime,
+            'category': cat,
+        })
+    
+    # Sort
+    if sort_param == 'updated':
+        files.sort(key=lambda f: f['modified'], reverse=True)
+    elif sort_param == 'alpha':
+        files.sort(key=lambda f: f['filename'].lower())
+    elif sort_param == 'alpha_desc':
+        files.sort(key=lambda f: f['filename'].lower(), reverse=True)
+    else:  # newest
+        files.sort(key=lambda f: f['modified'], reverse=True)
+    
+    return jsonify({'files': files})
+
+
+@agents_bp.route('/api/agents/<agent_id>/artifacts/<path:filename>', methods=['GET'])
+def api_get_artifact(agent_id, filename):
+    if not db.get_agent(agent_id):
+        return jsonify({'error': 'Agent not found'}), 404
+    if '/' in filename or '\\' in filename or '..' in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+    fpath = os.path.join(_artifacts_dir(agent_id), filename)
+    if not os.path.isfile(fpath):
+        return jsonify({'error': 'File not found'}), 404
+    from flask import send_file
+    import mimetypes
+    mime, _ = mimetypes.guess_type(filename)
+    if mime is None:
+        mime = 'application/octet-stream'
+    return send_file(fpath, mimetype=mime, as_attachment=False)
+
+
+@agents_bp.route('/api/agents/<agent_id>/artifacts/<path:filename>', methods=['DELETE'])
+def api_delete_artifact(agent_id, filename):
+    if not db.get_agent(agent_id):
+        return jsonify({'error': 'Agent not found'}), 404
+    if '/' in filename or '\\' in filename or '..' in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+    fpath = os.path.join(_artifacts_dir(agent_id), filename)
+    if not os.path.isfile(fpath):
+        return jsonify({'error': 'File not found'}), 404
+    os.remove(fpath)
+    return jsonify({'success': True})
+
+
+@agents_bp.route('/api/agents/<agent_id>/artifacts', methods=['POST'])
+def api_create_artifact(agent_id):
+    if not db.get_agent(agent_id):
+        return jsonify({'error': 'Agent not found'}), 404
+    data = request.get_json()
+    filename = data.get('filename', '').strip()
+    content = data.get('content', '')
+    if not filename:
+        return jsonify({'error': 'filename is required'}), 400
+    if '/' in filename or '\\' in filename or '..' in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+    artifacts_dir = _artifacts_dir(agent_id)
+    fpath = os.path.join(artifacts_dir, filename)
+    try:
+        with open(fpath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return jsonify({'success': True, 'filename': filename})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ==================== Agent Avatar API ====================
@@ -970,6 +1197,35 @@ def api_chat_agent_state(agent_id):
 
     if merged:
         state = AgentState.deserialize(_json.dumps(merged))
+        # Resolve active model badge
+        active_model = None
+        fb_id = agent_data.get('active_fallback_model_id')
+        if fb_id:
+            fb_model = db.get_model_by_id(fb_id)
+            if fb_model:
+                active_model = {
+                    'name': fb_model.get('name', fb_id),
+                    'model_name': fb_model.get('model_name', fb_id),
+                    'is_fallback': True,
+                    'id': fb_id,
+                }
+            else:
+                active_model = {
+                    'name': fb_id,
+                    'model_name': fb_id,
+                    'is_fallback': True,
+                    'id': fb_id,
+                }
+        else:
+            # Show primary model
+            prim_model = db.get_agent_default_model(agent_id)
+            if prim_model:
+                active_model = {
+                    'name': prim_model.get('name', 'unknown'),
+                    'model_name': prim_model.get('model_name', 'unknown'),
+                    'is_fallback': False,
+                    'id': prim_model.get('id', ''),
+                }
         return jsonify({
             'mode': state.mode,
             'tasks': state.tasks,
@@ -977,8 +1233,9 @@ def api_chat_agent_state(agent_id):
             'states': state.states,
             'focus': state.focus,
             'focus_reason': state.focus_reason,
+            'active_model': active_model,
         })
-    return jsonify({'mode': None})
+    return jsonify({'mode': None, 'active_model': None})
 
 
 @agents_bp.route('/api/agents/<agent_id>/chat/clear', methods=['POST'])
@@ -1370,6 +1627,61 @@ def api_agent_busy(agent_id):
         result['session_id'] = entry.get('session_id')
         result['elapsed'] = entry.get('elapsed')
     return jsonify(result)
+
+
+@agents_bp.route('/api/agents/status/stream', methods=['GET'])
+def api_agents_status_stream():
+    """SSE endpoint — pushes real-time agent busy/idle status changes.
+
+    Subscribes to the 'agent_busy_changed' event (emitted by AgentRuntime
+    when an agent starts or finishes an LLM turn) and forwards changes as
+    SSE events to every connected client.  No session filtering — the
+    browser-side JS decides which agent card to update.
+
+    Events:
+        event: agent_busy_changed
+        data: {"agent_id": "...", "busy": true|false, "session_id": "..."}
+    """
+    import queue as _queue
+    from backend.event_stream import event_stream
+
+    q = _queue.Queue(maxsize=200)
+
+    def handler(data):
+        try:
+            payload = {
+                'agent_id': data.get('agent_id', ''),
+                'busy': data.get('busy', False),
+                'session_id': data.get('session_id', ''),
+            }
+            q.put_nowait(payload)
+        except _queue.Full:
+            pass
+
+    event_stream.on('agent_busy_changed', handler)
+
+    def generate():
+        try:
+            while True:
+                try:
+                    payload = q.get(timeout=30)
+                except _queue.Empty:
+                    # Heartbeat to keep the connection alive through proxies
+                    yield ': heartbeat\n\n'
+                    continue
+                yield f'event: agent_busy_changed\ndata: {json.dumps(payload)}\n\n'
+        finally:
+            event_stream.off('agent_busy_changed', handler)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        }
+    )
 
 
 # ==================== Portal API ====================

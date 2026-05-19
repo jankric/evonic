@@ -26,15 +26,16 @@ def execute(agent: dict, args: dict) -> dict:
     new_title = args.get('title')
     new_description = args.get('description')
     new_priority = args.get('priority')
+    new_dependencies = args.get('dependencies')
 
     if not task_id:
         return {'status': 'error', 'message': 'task_id is required'}
 
     # At least one field must be provided
-    if new_status is None and new_assignee is None and new_title is None and new_description is None and new_priority is None:
+    if new_status is None and new_assignee is None and new_title is None and new_description is None and new_priority is None and new_dependencies is None:
         return {
             'status': 'error',
-            'message': 'At least one of "status", "assignee", "title", "description", or "priority" must be provided',
+            'message': 'At least one of "status", "assignee", "title", "description", "priority", or "dependencies" must be provided',
         }
 
     # Validate status if provided
@@ -134,5 +135,13 @@ def execute(agent: dict, args: dict) -> dict:
         event_stream.emit('kanban_task_updated', {'task': updated})
     except Exception:
         pass
+
+    # Handle dependencies if provided
+    if new_dependencies is not None:
+        try:
+            deps = [int(d) for d in new_dependencies]
+            kanban_db.set_dependencies(int(task_id), deps)
+        except (ValueError, TypeError) as e:
+            return {'status': 'error', 'message': str(e)}
 
     return {'status': 'success', 'task': updated}

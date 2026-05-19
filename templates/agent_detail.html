@@ -90,6 +90,31 @@ html.dark #tab-skills .border-amber-200 { border-color: #92400e !important; }
 html.dark #tab-skills .text-amber-800 { color: #fcd34d !important; }
 html.dark #tab-skills .text-amber-600 { color: #fbbf24 !important; }
 html.dark #tab-skills .text-amber-500 { color: #fbbf24 !important; }
+/* Dark mode: Artifacts tab */
+html.dark #tab-artifacts .bg-white { background: #1f2937 !important; }
+html.dark #tab-artifacts .border-gray-200 { border-color: #374151 !important; }
+html.dark #tab-artifacts .text-gray-800 { color: #f3f4f6 !important; }
+html.dark #tab-artifacts .text-gray-400 { color: #9ca3af !important; }
+html.dark #tab-artifacts .text-gray-500 { color: #9ca3af !important; }
+html.dark #tab-artifacts .hover\:bg-gray-100:hover { background: #374151 !important; }
+html.dark #tab-artifacts .bg-gray-50 { background: #374151 !important; }
+html.dark #tab-artifacts .text-gray-600 { color: #d1d5db !important; }
+html.dark #tab-artifacts .text-red-500 { color: #f87171 !important; }
+html.dark #tab-artifacts .hover\:text-red-700:hover { color: #fca5a5 !important; }
+html.dark #tab-artifacts .bg-red-50 { background: #451a1a !important; }
+/* Dark mode: Artifact viewer modal */
+html.dark #artifact-viewer-modal > div { background: #1f2937; }
+html.dark #artifact-viewer-modal .border-gray-200 { border-color: #374151; }
+html.dark #artifact-viewer-modal .border-gray-100 { border-color: #374151; }
+html.dark #artifact-viewer-modal .text-gray-800 { color: #f3f4f6; }
+html.dark #artifact-viewer-modal .text-gray-700 { color: #e5e7eb; }
+html.dark #artifact-viewer-modal .text-gray-600 { color: #d1d5db; }
+html.dark #artifact-viewer-modal .text-gray-500 { color: #9ca3af; }
+html.dark #artifact-viewer-modal .text-gray-400 { color: #6b7280; }
+html.dark #artifact-viewer-modal .bg-gray-50 { background: #374151; }
+html.dark #artifact-viewer-modal .bg-gray-100 { background: #4b5563; }
+html.dark #artifact-viewer-modal .bg-white { background: #1f2937; }
+html.dark #artifact-viewer-modal .hover\\:bg-gray-100:hover { background: #4b5563; }
 /* Dark mode: Channel detail modal */
 html.dark #channel-detail-modal .bg-gray-50 { background: #374151 !important; }
 html.dark #channel-detail-modal .border-gray-100 { border-color: #4b5563 !important; }
@@ -168,6 +193,9 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
         {% endif %}
         <button class="tab-btn flex-shrink-0 whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700" onclick="showTab('channels')" data-tab="channels">Channels</button>
         <button class="tab-btn flex-shrink-0 whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700" onclick="showTab('portals')" data-tab="portals">Portals</button>
+        {% if agent.artifacts_enabled %}
+        <button class="tab-btn flex-shrink-0 whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700" onclick="showTab('artifacts')" data-tab="artifacts">Artifacts</button>
+        {% endif %}
     </div>
 
     <!-- Settings Tab -->
@@ -199,6 +227,13 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
                     <option value="">-- Use global default --</option>
                 </select>
                 <p class="text-xs text-gray-400 mt-1">Select a model configured in Settings &gt; Models. "Use global default" uses whichever model is marked as default.</p>
+            </div>
+            <div class="mb-4">
+                <label class="block mb-1 text-gray-600 dark:text-gray-300 text-sm font-medium">Fallback Model</label>
+                <select id="agent-fallback-model-select" class="w-full p-2.5 border border-gray-300 rounded-md text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 dark:bg-gray-700 dark:text-gray-100">
+                    <option value="">-- None (no fallback) --</option>
+                </select>
+                <p class="text-xs text-gray-400 mt-1">If the primary model fails after all retries, the agent will automatically attempt this fallback model. Leave empty to skip fallback.</p>
             </div>
             <!-- Workplace Selector -->
             <div class="mb-4">
@@ -363,6 +398,16 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
                     </div>
 
                     <div>
+                        <label class="flex items-center gap-3 cursor-pointer select-none">
+                            {{ toggle_widget(id='agent-artifacts', checked=agent.artifacts_enabled) }}
+                            <div>
+                                <span class="text-gray-600 dark:text-gray-300 text-sm font-medium">Artifacts (Saved Files)</span>
+                                <p class="text-xs text-gray-400 mt-0.5">Allow agent to save files (reports, analysis, images, etc.) to its artifacts directory. When enabled, the agent's SYSTEM.md is updated with instructions to use the <code>save_artifact</code> tool. Files appear in the Artifacts tab.</p>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div>
                         <label class="block mb-1 text-gray-600 dark:text-gray-300 text-sm font-medium">Summarize Prompt</label>
                         <textarea id="agent-summarize-prompt" rows="10" class="w-full p-2.5 border border-gray-300 rounded-md text-sm font-mono focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/10">{{ agent.summarize_prompt or DEFAULT_SUMMARIZE_PROMPT }}</textarea>
                         <p class="text-xs text-gray-400 mt-1">Custom prompt for summarization. Use <code>{existing_summary_section}</code> and <code>{messages_text}</code> as placeholders.</p>
@@ -480,6 +525,58 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
         </div>
     </div>
 
+    <!-- Artifacts Tab -->
+    <div id="tab-artifacts" class="tab-content hidden flex-1 min-h-0 overflow-y-auto">
+        <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 p-6 max-w-5xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-base font-semibold text-gray-800 dark:text-gray-100">Artifacts</h3>
+            </div>
+
+            <!-- Search & Sort Bar -->
+            <div class="flex flex-wrap items-center gap-3 mb-4">
+                <div class="relative flex-1 min-w-[200px]">
+                    <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                    </svg>
+                    <input type="text" id="artifacts-search" placeholder="Search artifacts..." oninput="filterArtifacts()"
+                        class="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 dark:bg-gray-700 dark:text-gray-100">
+                </div>
+                <select id="artifacts-sort" onchange="loadArtifacts()"
+                    class="p-2 border border-gray-300 rounded-md text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 dark:bg-gray-700 dark:text-gray-100">
+                    <option value="newest">Newest</option>
+                    <option value="updated">Last Updated</option>
+                    <option value="alpha">Alphabetical A-Z</option>
+                    <option value="alpha_desc">Alphabetical Z-A</option>
+                </select>
+            </div>
+
+            <!-- Filter Chips -->
+            <div class="flex flex-wrap gap-2 mb-4" id="artifacts-filter-chips">
+                <button class="artifacts-filter-chip px-3 py-1.5 text-xs font-medium rounded-full border border-indigo-500 text-indigo-600 bg-indigo-50 dark:bg-indigo-900/20 dark:text-indigo-400" data-type="all" onclick="setArtifactFilter('all')">All</button>
+                <button class="artifacts-filter-chip px-3 py-1.5 text-xs font-medium rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700" data-type="document" onclick="setArtifactFilter('document')">Document</button>
+                <button class="artifacts-filter-chip px-3 py-1.5 text-xs font-medium rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700" data-type="text" onclick="setArtifactFilter('text')">Text</button>
+                <button class="artifacts-filter-chip px-3 py-1.5 text-xs font-medium rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700" data-type="image" onclick="setArtifactFilter('image')">Image</button>
+                <button class="artifacts-filter-chip px-3 py-1.5 text-xs font-medium rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700" data-type="sound" onclick="setArtifactFilter('sound')">Sound</button>
+                <button class="artifacts-filter-chip px-3 py-1.5 text-xs font-medium rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700" data-type="video" onclick="setArtifactFilter('video')">Video</button>
+                <button class="artifacts-filter-chip px-3 py-1.5 text-xs font-medium rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700" data-type="data" onclick="setArtifactFilter('data')">Data / Other</button>
+            </div>
+
+            <!-- Artifacts Grid -->
+            <div id="artifacts-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                <!-- Artifacts loaded dynamically -->
+            </div>
+
+            <!-- Empty State -->
+            <div id="artifacts-empty" class="hidden text-center py-12 text-gray-400">
+                <svg class="w-12 h-12 mx-auto mb-3 text-gray-300 dark:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"></path>
+                </svg>
+                <p class="text-sm">No artifacts yet.</p>
+                <p class="text-xs mt-1">Artifacts are files that agents save during their work. When an agent produces a report, analysis, or any output, it can be saved here.</p>
+            </div>
+        </div>
+    </div>
+
     <!-- Chat Tab -->
     <div id="tab-chat" class="tab-content flex-1 min-h-0">
         <div class="flex flex-col lg:flex-row gap-4 h-full" style="min-height:0;">
@@ -552,7 +649,7 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
                     <div class="flex justify-between items-center px-4 pt-4 pb-2 flex-shrink-0">
                         <div class="flex items-center gap-2">
                             <h3 class="font-semibold text-gray-800 dark:text-gray-100">Agent State</h3>
-                            <span id="state-busy-dot" class="hidden inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full"><span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>Busy</span>
+                            <span id="state-busy-dot" class="hidden items-center gap-1.5 text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full"><span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>Busy</span>
                         </div>
                         <button onclick="refreshAgentState()" class="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1" title="Refresh">
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H4.598a.75.75 0 0 0-.75.75v3.634a.75.75 0 0 0 1.5 0v-2.033l-.312.311a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm-10.625-2.85a5.5 5.5 0 0 1 9.201-2.465l.312.31H11.767a.75.75 0 0 0 0 1.5h3.634a.75.75 0 0 0 .75-.75V3.535a.75.75 0 0 0-1.5 0v2.033l-.312-.31A7 7 0 0 0 2.627 8.396a.75.75 0 0 0 1.449.39l.611.789Z" clip-rule="evenodd"/></svg>
@@ -605,7 +702,7 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
                 <div class="flex justify-between items-center px-4 py-2 border-b border-gray-100">
                     <div class="flex items-center gap-2">
                         <h5 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Agent State</h5>
-                        <span id="mobile-state-busy-dot" class="hidden inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full"><span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>Busy</span>
+                        <span id="mobile-state-busy-dot" class="hidden items-center gap-1.5 text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full"><span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>Busy</span>
                     </div>
                     <button onclick="refreshAgentState()" class="text-xs text-gray-400 hover:text-gray-600" title="Refresh">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H4.598a.75.75 0 0 0-.75.75v3.634a.75.75 0 0 0 1.5 0v-2.033l-.312.311a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm-10.625-2.85a5.5 5.5 0 0 1 9.201-2.465l.312.31H11.767a.75.75 0 0 0 0 1.5h3.634a.75.75 0 0 0 .75-.75V3.535a.75.75 0 0 0-1.5 0v2.033l-.312-.31A7 7 0 0 0 2.627 8.396a.75.75 0 0 0 1.449.39l.611.789Z" clip-rule="evenodd"/></svg>
@@ -659,7 +756,7 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
                 <span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded font-mono" id="tool-detail-id"></span>
                 <span id="tool-detail-skill" class="hidden text-xs bg-indigo-50 text-indigo-500 px-2 py-0.5 rounded"></span>
             </div>
-            <button onclick="document.getElementById('tool-detail-modal').classList.add('hidden')" class="bg-transparent border-none text-gray-400 text-2xl cursor-pointer hover:text-gray-800">&times;</button>
+            <button onclick="document.getElementById('tool-detail-modal').classList.add('hidden')" class="bg-transparent border-none text-gray-400 text-2xl cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">&times;</button>
         </div>
         <div class="p-5 flex-1 overflow-y-auto space-y-4">
             <!-- Description -->
@@ -675,7 +772,7 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
                 <!-- Tab bar -->
                 <div class="flex border-b border-gray-200 mt-2">
                     <button id="tool-tab-btn-prod" onclick="switchToolTab('prod')" class="px-4 py-2 text-sm font-medium border-b-2 border-indigo-500 text-indigo-600">Prod</button>
-                    <button id="tool-tab-btn-mock" onclick="switchToolTab('mock')" class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">Mock</button>
+                    <button id="tool-tab-btn-mock" onclick="switchToolTab('mock')" class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-200">Mock</button>
                 </div>
                 <!-- Prod tab -->
                 <div id="tool-tab-prod" class="pt-3">
@@ -1213,6 +1310,7 @@ function showTab(name) {
     if (name === 'skills') loadSkills();
     if (name === 'channels') loadChannels();
     if (name === 'portals') loadPortals();
+    if (name === 'artifacts') loadArtifacts();
     if (name === 'chat' && !chatLoaded) { loadChatHistory(); refreshSessionState(); refreshAgentState(); }
 
     if (name === 'chat') {
@@ -1399,10 +1497,11 @@ async function saveGeneral() {
     if (!data.success) { showToast("Failed to save settings.", "error"); return; }
 
     const selectedModelId = document.getElementById('agent-model-select').value || null;
+    const selectedFallbackModelId = document.getElementById('agent-fallback-model-select').value || null;
     await fetch(`/api/agents/${AGENT_ID}/model`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ model_id: selectedModelId })
+        body: JSON.stringify({ model_id: selectedModelId, fallback_model_id: selectedFallbackModelId })
     });
 
     if (workspaceChanged) {
@@ -1432,6 +1531,7 @@ async function saveAdvanced() {
             disable_parallel_tool_execution: document.getElementById('agent-parallel-exec').checked ? 1 : 0,
             disable_turn_prefetch: document.getElementById('agent-prefetch').checked ? 1 : 0,
             agent_messaging_enabled: document.getElementById('agent-messaging-enabled').checked ? 1 : 0,
+            artifacts_enabled: document.getElementById('agent-artifacts').checked ? 1 : 0,
         })
     });
     const data = await res.json();
@@ -1607,7 +1707,7 @@ function renderToolsList() {
                 </div>
             </div>
             <button onclick="event.stopPropagation(); removeOrphan('${escapeHtml(id)}')" title="Remove"
-                    class="ml-2 p-1.5 rounded text-amber-400 hover:text-red-500 hover:bg-red-50 transition-colors">
+                    class="ml-2 p-1.5 rounded text-amber-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/></svg>
             </button>
         </div>`).join('');
@@ -1619,7 +1719,7 @@ function renderToolsList() {
         const safeId = escapeHtml(t.id);
         return `
         <div class="tool-row flex items-center justify-between p-3 dark:bg-gray-800 dark:border-gray-600 rounded-md border transition-colors cursor-pointer
-                    ${isAsgn ? 'bg-gray-50 border-gray-200 hover:bg-gray-100' : 'bg-white border-gray-100 hover:bg-gray-50'}"
+                    ${isAsgn ? 'bg-gray-50 border-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700' : 'bg-white border-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700'}"
              data-assigned="${isAsgn && !isBuiltin}"
              data-builtin="${isBuiltin}"
              data-tool-id="${safeId}"
@@ -2697,7 +2797,13 @@ function updateBusyBadge(busy) {
     const mobileDot = document.getElementById('mobile-state-busy-dot');
     [dot, mobileDot].forEach(el => {
         if (!el) return;
-        busy ? el.classList.remove('hidden') : el.classList.add('hidden');
+        if (busy) {
+            el.classList.remove('hidden');
+            el.classList.add('inline-flex');
+        } else {
+            el.classList.add('hidden');
+            el.classList.remove('inline-flex');
+        }
     });
 }
 
@@ -3268,16 +3374,25 @@ async function loadAgentModelSelector() {
         const modelsData = await modelsRes.json();
         const agentModelData = await agentModelRes.json();
         const currentModelId = agentModelData.default_model_id || '';
+        const currentFallbackModelId = agentModelData.fallback_model_id || '';
 
         const sel = document.getElementById('agent-model-select');
+        const fbSel = document.getElementById('agent-fallback-model-select');
         (modelsData.models || []).forEach(m => {
             const opt = document.createElement('option');
             opt.value = m.id;
             opt.textContent = `${m.name} (${m.model_name})`;
             if (m.id === currentModelId) opt.selected = true;
             sel.appendChild(opt);
+
+            const fbOpt = document.createElement('option');
+            fbOpt.value = m.id;
+            fbOpt.textContent = `${m.name} (${m.model_name})`;
+            if (m.id === currentFallbackModelId) fbOpt.selected = true;
+            fbSel.appendChild(fbOpt);
         });
         if (!currentModelId) sel.value = '';
+        if (!currentFallbackModelId) fbSel.value = '';
     } catch (err) {
         console.error('[ModelSelector] Failed to load:', err);
     }
@@ -3434,7 +3549,7 @@ setInterval(pollWorkplaceStatus, 5000);
 // ==================== Tab persistence ====================
 // Restore tab from URL hash on page load (same pattern as settings.html)
 (function() {
-    const valid = ['chat', 'general', 'knowledge', 'tools', 'channels', 'skills'];
+    const valid = ['chat', 'general', 'knowledge', 'tools', 'skills', 'channels', 'portals', 'artifacts'];
     const hash = location.hash.replace('#', '');
     window._tabInitHash = (hash && valid.includes(hash)) ? hash : 'chat';
     if (window._tabInitHash !== 'chat') {
@@ -3461,6 +3576,256 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+
+// ==================== Artifacts Tab ====================
+let _artifactsData = [];
+let _artifactsFilterType = 'all';
+
+async function loadArtifacts() {
+    const sort = document.getElementById('artifacts-sort').value;
+    try {
+        const res = await fetch(`/api/agents/${AGENT_ID}/artifacts?sort=${sort}`);
+        const data = await res.json();
+        _artifactsData = data.files || [];
+        renderArtifacts();
+    } catch(e) {
+        console.error('Failed to load artifacts:', e);
+    }
+}
+
+function renderArtifacts() {
+    const grid = document.getElementById('artifacts-grid');
+    const empty = document.getElementById('artifacts-empty');
+    
+    // Apply search filter
+    const query = (document.getElementById('artifacts-search').value || '').trim().toLowerCase();
+    let filtered = _artifactsData;
+    if (query) {
+        filtered = filtered.filter(f => f.filename.toLowerCase().includes(query));
+    }
+    
+    // Apply type filter
+    if (_artifactsFilterType !== 'all') {
+        filtered = filtered.filter(f => f.category === _artifactsFilterType);
+    }
+    
+    if (filtered.length === 0) {
+        grid.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+    }
+    empty.classList.add('hidden');
+    
+    grid.innerHTML = filtered.map(f => {
+        const sizeStr = f.size < 1024 ? f.size + ' B' : f.size < 1048576 ? (f.size / 1024).toFixed(1) + ' KB' : (f.size / 1048576).toFixed(1) + ' MB';
+        const date = new Date(f.modified * 1000);
+        const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        const icon = getArtifactIcon(f.category);
+        const ext = f.filename.split('.').pop();
+        
+        return `
+            <div class="bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg p-2.5 hover:border-indigo-300 dark:hover:border-indigo-500 transition-colors cursor-pointer flex items-center gap-2.5 group" onclick="openArtifact('${f.filename}', '${f.category}')">
+                <div class="flex items-center justify-center w-8 h-8 rounded-md flex-shrink-0 ${icon.bg}">
+                    <svg class="w-4 h-4 ${icon.color}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        ${icon.path}
+                    </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-gray-800 dark:text-gray-200 truncate" title="${f.filename}">${f.filename}</p>
+                    <p class="text-xs text-gray-400">${sizeStr} &middot; ${dateStr}</p>
+                </div>
+                <div class="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onclick="event.stopPropagation(); downloadArtifact('${f.filename}')" title="Download" class="p-1.5 text-indigo-500 hover:text-indigo-700 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    </button>
+                    <button onclick="event.stopPropagation(); deleteArtifact('${f.filename}')" title="Delete" class="p-1.5 text-red-400 hover:text-red-600 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function getArtifactIcon(category) {
+    switch(category) {
+        case 'document':
+            return { bg: 'bg-blue-50 dark:bg-blue-900/20', color: 'text-blue-500', path: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>' };
+        case 'image':
+            return { bg: 'bg-green-50 dark:bg-green-900/20', color: 'text-green-500', path: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>' };
+        case 'sound':
+            return { bg: 'bg-purple-50 dark:bg-purple-900/20', color: 'text-purple-500', path: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>' };
+        case 'video':
+            return { bg: 'bg-rose-50 dark:bg-rose-900/20', color: 'text-rose-500', path: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>' };
+        case 'text':
+            return { bg: 'bg-amber-50 dark:bg-amber-900/20', color: 'text-amber-500', path: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>' };
+        default:
+            return { bg: 'bg-gray-50 dark:bg-gray-800', color: 'text-gray-500', path: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"></path>' };
+    }
+}
+
+function filterArtifacts() {
+    renderArtifacts();
+}
+
+function setArtifactFilter(type) {
+    _artifactsFilterType = type;
+    document.querySelectorAll('.artifacts-filter-chip').forEach(chip => {
+        if (chip.dataset.type === type) {
+            chip.classList.add('border-indigo-500', 'text-indigo-600', 'bg-indigo-50', 'dark:bg-indigo-900/20', 'dark:text-indigo-400');
+            chip.classList.remove('border-gray-300', 'text-gray-600', 'hover:bg-gray-50', 'dark:border-gray-600', 'dark:text-gray-400', 'dark:hover:bg-gray-700');
+        } else {
+            chip.classList.remove('border-indigo-500', 'text-indigo-600', 'bg-indigo-50', 'dark:bg-indigo-900/20', 'dark:text-indigo-400');
+            chip.classList.add('border-gray-300', 'text-gray-600', 'hover:bg-gray-50', 'dark:border-gray-600', 'dark:text-gray-400', 'dark:hover:bg-gray-700');
+        }
+    });
+    renderArtifacts();
+}
+
+function downloadArtifact(filename) {
+    window.open(`/api/agents/${AGENT_ID}/artifacts/${filename}`, '_blank');
+}
+
+function openArtifact(filename, category) {
+    const existing = document.getElementById('artifact-viewer-modal');
+    if (existing) existing.remove();
+
+    const fileUrl = `/api/agents/${AGENT_ID}/artifacts/${filename}`;
+    const ext = filename.split('.').pop().toLowerCase();
+
+    const html = `
+    <div id="artifact-viewer-modal" class="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 p-4" onclick="if(event.target===this)closeArtifactViewer()">
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col overflow-hidden" id="artifact-viewer-box">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-600 flex-shrink-0">
+                <div class="flex items-center gap-3 min-w-0">
+                    <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 text-indigo-500 flex-shrink-0">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                    </span>
+                    <div class="min-w-0">
+                        <h3 class="text-base font-semibold text-gray-800 dark:text-gray-100 truncate">${filename}</h3>
+                        <p class="text-xs text-gray-400">${category.charAt(0).toUpperCase() + category.slice(1)}</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                    <a href="${fileUrl}" download class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-md transition-colors" title="Download">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                        Download
+                    </a>
+                    <button onclick="closeArtifactViewer()" class="flex items-center justify-center w-8 h-8 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" title="Close">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="flex-1 overflow-y-auto p-6" id="artifact-viewer-body">
+                <div class="flex items-center justify-center py-16">
+                    <svg class="animate-spin w-8 h-8 text-indigo-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                </div>
+            </div>
+        </div>
+    </div>`;
+
+    document.body.insertAdjacentHTML('beforeend', html);
+    document.addEventListener('keydown', _artifactViewerEscHandler);
+
+    renderArtifactContent(filename, category, fileUrl, ext);
+}
+
+function closeArtifactViewer() {
+    const modal = document.getElementById('artifact-viewer-modal');
+    if (modal) modal.remove();
+    document.removeEventListener('keydown', _artifactViewerEscHandler);
+}
+
+function _artifactViewerEscHandler(e) {
+    if (e.key === 'Escape') closeArtifactViewer();
+}
+
+async function renderArtifactContent(filename, category, fileUrl, ext) {
+    const body = document.getElementById('artifact-viewer-body');
+    if (!body) return;
+
+    try {
+        if (ext === 'md') {
+            // Fetch and render markdown
+            const res = await fetch(fileUrl);
+            const text = await res.text();
+            body.innerHTML = '<div class="recap-prose max-w-none">' + marked.parse(text) + '</div>';
+        } else if (ext === 'pdf') {
+            // Embed PDF viewer
+            body.innerHTML = `<iframe src="${fileUrl}" class="w-full rounded-md border border-gray-200 dark:border-gray-600" style="min-height: 70vh;"></iframe>`;
+        } else if (['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v'].includes(ext)) {
+            // Video player
+            body.innerHTML = `
+                <div class="flex justify-center">
+                    <video controls class="max-w-full max-h-[70vh] rounded-md shadow-lg">
+                        <source src="${fileUrl}" type="video/${ext === 'mov' ? 'quicktime' : ext === 'mkv' ? 'x-matroska' : ext === 'm4v' ? 'mp4' : ext}">
+                        Your browser does not support the video tag.
+                    </video>
+                </div>`;
+        } else if (['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'wma'].includes(ext)) {
+            // Audio player
+            body.innerHTML = `
+                <div class="flex flex-col items-center gap-4 py-8">
+                    <div class="flex items-center justify-center w-20 h-20 rounded-full bg-purple-50 dark:bg-purple-900/20 text-purple-500">
+                        <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>
+                    </div>
+                    <div class="text-center mb-2">
+                        <p class="text-sm font-medium text-gray-700 dark:text-gray-300">${filename}</p>
+                    </div>
+                    <audio controls class="w-full max-w-lg">
+                        <source src="${fileUrl}" type="audio/${ext === 'm4a' ? 'mp4' : ext === 'wma' ? 'x-ms-wma' : ext}">
+                        Your browser does not support the audio tag.
+                    </audio>
+                </div>`;
+        } else if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext)) {
+            // Image viewer
+            body.innerHTML = `
+                <div class="flex justify-center">
+                    <img src="${fileUrl}" alt="${filename}" class="max-w-full max-h-[70vh] rounded-md shadow-lg object-contain">
+                </div>`;
+        } else if (['txt', 'csv', 'json', 'yaml', 'yml', 'xml', 'log'].includes(ext)) {
+            // Plain text viewer
+            const res = await fetch(fileUrl);
+            const text = await res.text();
+            const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            body.innerHTML = `<pre class="bg-gray-50 dark:bg-gray-900 rounded-md p-4 text-sm text-gray-800 dark:text-gray-200 overflow-x-auto max-h-[70vh] whitespace-pre-wrap font-mono">${escaped}</pre>`;
+        } else {
+            // Unknown type - show file info + download prompt
+            body.innerHTML = `
+                <div class="flex flex-col items-center gap-4 py-12 text-gray-400">
+                    <svg class="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                    <p class="text-sm">Preview not available for this file type.</p>
+                    <a href="${fileUrl}" download class="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-md text-sm font-medium transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                        Download File
+                    </a>
+                </div>`;
+        }
+    } catch(e) {
+        body.innerHTML = `
+            <div class="flex flex-col items-center gap-3 py-12 text-red-400">
+                <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86l-8.6 14.86A1 1 0 002.56 20h18.88a1 1 0 00.87-1.5l-8.6-14.86a1 1 0 00-1.74 0z"></path></svg>
+                <p class="text-sm">Failed to load file content.</p>
+            </div>`;
+        console.error('Failed to render artifact:', e);
+    }
+}
+
+async function deleteArtifact(filename) {
+    if (!confirm(`Delete artifact "${filename}"?`)) return;
+    try {
+        const res = await fetch(`/api/agents/${AGENT_ID}/artifacts/${filename}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+            showToast('Artifact deleted.', 'success');
+            loadArtifacts();
+        } else {
+            showToast(data.error || 'Failed to delete artifact.', 'error');
+        }
+    } catch(e) {
+        showToast('Network error.', 'error');
+    }
+}
 // ==================== Clone Agent ====================
 function showCloneModal() {
     // Remove existing clone modal if any

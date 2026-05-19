@@ -75,6 +75,14 @@ PROVIDER_DEFAULTS = {
         # prior assistant messages, so default thinking on for this provider.
         "default_thinking": True,
     },
+    "deepseek": {
+        "type": "remote",
+        "base_url": "https://api.deepseek.com",
+        "api_key_required": True,
+        "placeholder_model": "deepseek-v4-pro",
+        "label": "DeepSeek",
+        "description": "Cloud · API key required",
+    },
     "llama.cpp": {
         "type": "local",
         "base_url": "http://localhost:8080/v1",
@@ -158,6 +166,36 @@ TONE_PRESETS = {
         "prompt_prefix": "",  # user-provided text is used instead
     },
 }
+
+# ---------------------------------------------------------------------------
+# Notes.md template
+# ---------------------------------------------------------------------------
+
+_NOTES_MD_TEMPLATE = """# Notes.md -- User Preferences & Instructions
+
+This file stores your user's personal preferences, tastes, language
+preferences, and communication style instructions.
+
+## What to store here
+
+- User's preferred language (e.g. "User prefers Bahasa Indonesia")
+- Communication style preferences (e.g. "User likes concise answers",
+  "User dislikes emoji")
+- Personal instructions (e.g. "Call the user 'Pak'")
+- Tastes and preferences (e.g. "User prefers bullet points over paragraphs")
+
+## What NOT to store here (use `remember` instead)
+
+- Factual/memorization data: addresses, phone numbers, email, birthday
+- Secret/sensitive data: passwords, tokens, PINs, secret codes, bank accounts
+
+## Usage
+
+- Read this file: read("notes.md")
+- Update via write_file with path /_self/kb/notes.md
+- Update immediately when the user gives a new preference
+- Prioritize notes.md over `remember` for non-factual preference information
+"""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -447,6 +485,13 @@ def run_setup(
             os.makedirs(_kb_dir, exist_ok=True)
             shutil.copy2(_default_kb, os.path.join(_kb_dir, "evonic.md"))
 
+        # 4.6 Create notes.md template for user preferences
+        _notes_md_path = os.path.join(config.BASE_DIR, "agents", agent_id, "kb", "notes.md")
+        if not os.path.isfile(_notes_md_path):
+            os.makedirs(os.path.dirname(_notes_md_path), exist_ok=True)
+            with open(_notes_md_path, 'w', encoding='utf-8') as _f:
+                _f.write(_NOTES_MD_TEMPLATE)
+
         # 5. Assign default tools
         db.set_agent_tools(
             agent_id, ["bash", "runpy", "patch", "write_file", "read_file"]
@@ -488,13 +533,29 @@ def run_setup(
         if password:
             from werkzeug.security import generate_password_hash
 
-            pw_hash = generate_password_hash(password)
+            pw_hash = generate_password_hash(password, method="pbkdf2:sha256")
             env_path = os.path.join(config.BASE_DIR, ".env")
             _update_env_var(env_path, "ADMIN_PASSWORD_HASH", pw_hash)
 
         return {"success": True, "agent_id": agent_id}
 
     except Exception as e:
+        # Roll back partial DB state so retries work:
+        # the agent (created at step 3) and model (created at step 1).
+        # Use raw SQL because db.delete_agent() refuses to delete super agents.
+        try:
+            with db._connect() as conn:
+                conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+                conn.execute("DELETE FROM agent_tools WHERE agent_id = ?", (agent_id,))
+                conn.commit()
+        except Exception:
+            pass
+        try:
+            with db._connect() as conn:
+                conn.execute("DELETE FROM llm_models WHERE id = ?", (model_id,))
+                conn.commit()
+        except Exception:
+            pass
         return {"error": str(e)}
 
 
@@ -602,7 +663,7 @@ def run_reconfigure(
         if password:
             from werkzeug.security import generate_password_hash
 
-            pw_hash = generate_password_hash(password)
+            pw_hash = generate_password_hash(password, method="pbkdf2:sha256")
             env_path = os.path.join(config.BASE_DIR, ".env")
             _update_env_var(env_path, "ADMIN_PASSWORD_HASH", pw_hash)
 

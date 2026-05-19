@@ -8,6 +8,8 @@ in memory. Communication uses the existing agent-to-agent messaging protocol.
 Sub-Agent ID convention: {parent_id}_sub_{counter}  (e.g., linus_sub_1)
 """
 
+import os
+import shutil
 import threading
 import time
 import logging
@@ -99,8 +101,8 @@ class SubAgentManager:
         # (is_super is inherited from parent)
         config['is_subagent'] = True
         config['parent_id'] = parent_id
-        # Sub-agents use the parent's per-agent chat DB
-        config['_db_agent_id'] = parent_id
+        # Sub-agents now have their own chat DB in /tmp/evonic-sub-agents/
+        # (see AgentChatDB.__init__ in models/chat.py)
 
         sub = SubAgent(sub_id, parent_id, config)
 
@@ -138,6 +140,17 @@ class SubAgentManager:
                     _logger.info("Archived %d session(s) for sub-agent %s", archived, sub_agent_id)
             except Exception as e:
                 _logger.warning("Failed to archive sessions for sub-agent %s: %s", sub_agent_id, e)
+            # Clean up the sub-agent's temp chat DB directory
+            tmp_dir = os.path.join("/tmp/evonic-sub-agents", sub_agent_id)
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception as e:
+                _logger.warning("Failed to clean up temp dir for sub-agent %s: %s", sub_agent_id, e)
+            # Clean up legacy agents/ dir (created by old bug before /tmp routing)
+            from models.chatlog import _AGENTS_DIR
+            legacy_dir = os.path.join(_AGENTS_DIR, sub_agent_id)
+            if os.path.isdir(legacy_dir):
+                shutil.rmtree(legacy_dir, ignore_errors=True)
             _logger.info("Sub-agent destroyed: %s (parent=%s)", sub_agent_id, sub.parent_id)
             return True
 
@@ -193,14 +206,9 @@ class SubAgentManager:
                 sid for sid, sub in self._subagents.items()
                 if sub.parent_id == parent_id
             ]
-            for sid in to_remove:
-                del self._subagents[sid]
 
-        if to_remove:
-            _logger.info(
-                "Destroyed %d sub-agents for parent %s: %s",
-                len(to_remove), parent_id, ', '.join(to_remove),
-            )
+        for sid in to_remove:
+            self.destroy(sid)
 
         return len(to_remove)
 
@@ -252,6 +260,13 @@ class SubAgentManager:
             count = len(self._subagents)
             self._subagents.clear()
             self._counters.clear()
+        # Clean up all sub-agent temp directories
+        tmp_root = "/tmp/evonic-sub-agents"
+        try:
+            if os.path.isdir(tmp_root):
+                shutil.rmtree(tmp_root, ignore_errors=True)
+        except Exception as e:
+            _logger.warning("Failed to clean up sub-agent temp dir %s: %s", tmp_root, e)
         _logger.info("SubAgentManager shutdown: cleared %d sub-agent(s)", count)
 
 

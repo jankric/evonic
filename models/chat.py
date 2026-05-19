@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Generator
 
 AGENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'agents')
+SUB_AGENTS_TMP_DIR = "/tmp/evonic-sub-agents"
 
 
 def _migrate_session_id(cursor, old_id: str, new_id: str) -> None:
@@ -22,7 +23,13 @@ class AgentChatDB:
 
     def __init__(self, agent_id: str):
         self.agent_id = agent_id
-        agent_dir = os.path.join(AGENTS_DIR, agent_id)
+        # Sub-agents store their chat DB in a temp directory (they are ephemeral)
+        # so they don't pollute the persistent agents/ directory.
+        from backend.subagent_manager import subagent_manager
+        if subagent_manager.is_subagent(agent_id):
+            agent_dir = os.path.join(SUB_AGENTS_TMP_DIR, agent_id)
+        else:
+            agent_dir = os.path.join(AGENTS_DIR, agent_id)
         os.makedirs(agent_dir, exist_ok=True)
         self.db_path = os.path.join(agent_dir, 'chat.db')
         self._init_tables()
@@ -267,20 +274,33 @@ class AgentChatDB:
                         r['metadata'] = None
             return rows
 
-    def get_first_agent_request_metadata(self, session_id: str) -> dict | None:
-        """Return metadata of the first user message with agent_message=true in the session.
+    def get_latest_agent_request_metadata(self, session_id: str, sender_agent_id: str = None) -> Optional[dict]:
+        """Return metadata of the most recent user message with agent_message=true in the session.
 
         Used by auto-forward to locate report_to_id even when the originating
         message falls outside the recent-message window.
+
+        Args:
+            sender_agent_id: If provided, only match messages where
+                metadata->from_agent_id equals this value.
         """
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT metadata FROM chat_messages
-                WHERE session_id = ? AND role = 'user' AND metadata LIKE '%"agent_message"%'
-                ORDER BY created_at ASC LIMIT 1
-            """, (session_id,))
+            if sender_agent_id:
+                cursor.execute("""
+                    SELECT metadata FROM chat_messages
+                    WHERE session_id = ? AND role = 'user'
+                      AND metadata LIKE '%"agent_message"%'
+                      AND metadata LIKE ?
+                    ORDER BY created_at DESC LIMIT 1
+                """, (session_id, f'%"from_agent_id": "{sender_agent_id}"%'))
+            else:
+                cursor.execute("""
+                    SELECT metadata FROM chat_messages
+                    WHERE session_id = ? AND role = 'user' AND metadata LIKE '%"agent_message"%'
+                    ORDER BY created_at DESC LIMIT 1
+                """, (session_id,))
             row = cursor.fetchone()
             if not row or not row['metadata']:
                 return None
@@ -317,7 +337,7 @@ class AgentChatDB:
                 (self._AGENT_STATE_KEY, content))
             conn.commit()
 
-    def get_agent_state(self) -> str | None:
+    def get_agent_state(self) -> Optional[str]:
         with self._connect() as conn:
             # Try global key first
             row = conn.execute(
@@ -347,7 +367,7 @@ class AgentChatDB:
                 (session_id, content))
             conn.commit()
 
-    def get_session_state(self, session_id: str) -> str | None:
+    def get_session_state(self, session_id: str) -> Optional[str]:
         """Get session-level state for a specific session_id.
 
         If no session_state exists yet, performs one-time migration from the
@@ -846,10 +866,14 @@ class AgentChatManager:
 
     def __init__(self):
         self._dbs: Dict[str, AgentChatDB] = {}
+        self._lock = threading.Lock()
 
     def get(self, agent_id: str) -> AgentChatDB:
         if agent_id not in self._dbs:
-            self._dbs[agent_id] = AgentChatDB(agent_id)
+            with self._lock:
+                # Double-check: another thread may have created it while we waited
+                if agent_id not in self._dbs:
+                    self._dbs[agent_id] = AgentChatDB(agent_id)
         return self._dbs[agent_id]
 
 

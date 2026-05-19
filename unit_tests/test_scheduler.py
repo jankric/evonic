@@ -331,7 +331,7 @@ class TestSchedulerActions:
         s = self._create_schedule('agent_message',
                                    {'agent_id': 'agent-42', 'message': 'Hello!'})
         with patch('backend.agent_runtime.agent_runtime') as mock_rt:
-            scheduler._action_agent_message(s['action_config'])
+            scheduler._action_static_message(s['action_config'])
             mock_rt.handle_message.assert_called_once_with(
                 agent_id='agent-42',
                 external_user_id='__scheduler__',
