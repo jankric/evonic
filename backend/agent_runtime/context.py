@@ -590,6 +590,32 @@ def get_compiled_context(agent_id: str, user_id: str = None) -> dict:
     return result
 
 
+def command_hint_from_content(content: str) -> str:
+    """Extract a command hint from a serialized tool result JSON string.
+
+    Used by build_message_entry() to route tool output through RTK compression.
+    Falls back to "unknown" if the content format is unrecognizable.
+    """
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return "unknown"
+
+    if not isinstance(data, dict):
+        return "unknown"
+
+    # read_file: has file_path
+    if "file_path" in data:
+        return "read_file"
+
+    # bash/runpy/exec tools: have exit_code + stdout/stderr
+    if "exit_code" in data and ("stdout" in data or "stderr" in data):
+        return "bash"
+
+    # catch-all for any other structured dict
+    return "unknown"
+
+
 def build_message_entry(msg: dict, agent: dict) -> dict:
     """Convert a DB message row into an LLM message dict."""
     entry = {"role": msg['role']}
@@ -606,11 +632,27 @@ def build_message_entry(msg: dict, agent: dict) -> dict:
         entry['content'] = parts
     elif msg.get('content'):
         content = msg['content']
-        # Safety net: re-truncate legacy DB entries that were stored untruncated
+        # Safety net: try RTK compression before falling back to blunt truncation.
+        # Covers legacy DB entries and code paths that reach here outside llm_loop.
         if msg.get('role') == 'tool' and len(content) > MAX_TOOL_RESULT_CHARS:
-            remaining = len(content) - MAX_TOOL_RESULT_CHARS
-            content = (content[:MAX_TOOL_RESULT_CHARS] +
-                       f"\n...[truncated — {remaining} chars omitted]")
+            try:
+                from backend.token_compressor.compressor_registry import get_registry
+                reg = get_registry()
+                hint = command_hint_from_content(content)
+                # Assume exit_code=0 — we don't have it when reading from DB
+                compressed = reg.compress(hint, 0, content)
+                # Only use compressed result if it differs (filter actually matched)
+                if compressed != content:
+                    content = compressed
+            except Exception:
+                # Fail-open: fall through to old truncation behavior
+                pass
+
+            # Still apply blunt truncation if RTK didn't shrink enough
+            if len(content) > MAX_TOOL_RESULT_CHARS:
+                remaining = len(content) - MAX_TOOL_RESULT_CHARS
+                content = (content[:MAX_TOOL_RESULT_CHARS] +
+                           f"\n...[truncated — {remaining} chars omitted]")
         entry['content'] = content
     if msg.get('tool_calls'):
         entry['tool_calls'] = msg['tool_calls']
