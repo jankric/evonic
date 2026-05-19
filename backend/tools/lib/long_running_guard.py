@@ -88,6 +88,10 @@ def check_long_running(script: str) -> dict | None:
     if script.lstrip().startswith(BYPASS_MARKER):
         return None
 
+    # Skip if the script is already wrapped in tmux/screen/nohup by the caller
+    if re.match(r'^\s*(tmux\s|screen\s|nohup\s)', script):
+        return None
+
     matched = _detect_long_running(script)
     if not matched:
         return None
@@ -107,10 +111,12 @@ def check_long_running(script: str) -> dict | None:
     return {
         "matched_command": matched["description"],
         "suggestion": (
-            f"Detected '{matched['description']}' which may take a long time and "
-            f"cause a timeout. Run it in a tmux/screen session with logging instead. "
-            f"Use the provided run_script to start, monitor_script to watch progress, "
-            f"and check_status_script to check completion."
+            f"Detected '{matched['description']}' which may exceed the bash timeout. "
+            f"Do NOT retry the original command or try to wrap it yourself. "
+            f"Instead, execute the value of 'run_script' below as your next bash call — "
+            f"it wraps your command in tmux/screen with logging to '{log_file}'. "
+            f"After starting, use 'monitor_script' to watch output and "
+            f"'check_status_script' to poll for completion."
         ),
         "run_script": run_script,
         "log_file": log_file,
@@ -266,6 +272,31 @@ def _self_test():
     assert r3 is None, "Bypass marker with leading space should still work"
     passed += 1
     print(f"Test 14 PASSED: bypass marker with whitespace")
+
+    # Test 15: nohup-wrapped command not flagged
+    r = check_long_running("nohup cargo build --release &")
+    assert r is None, "nohup-wrapped command should bypass guard"
+    passed += 1
+    print(f"Test 15 PASSED: nohup cargo build bypasses guard")
+
+    # Test 16: tmux-wrapped command not flagged
+    r = check_long_running("tmux new-session -d -s build 'cargo build'")
+    assert r is None, "tmux-wrapped command should bypass guard"
+    passed += 1
+    print(f"Test 16 PASSED: tmux cargo build bypasses guard")
+
+    # Test 17: screen-wrapped command not flagged
+    r = check_long_running("screen -dmS build make -j4")
+    assert r is None, "screen-wrapped command should bypass guard"
+    passed += 1
+    print(f"Test 17 PASSED: screen make bypasses guard")
+
+    # Test 18: Suggestion text contains actionable instruction
+    r = check_long_running("cargo build")
+    assert "Do NOT retry" in r["suggestion"], "Suggestion should tell agent not to retry"
+    assert "run_script" in r["suggestion"], "Suggestion should reference run_script"
+    passed += 1
+    print(f"Test 18 PASSED: suggestion contains actionable instructions")
 
     print(f"\nAll {passed} tests passed!")
 
