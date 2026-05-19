@@ -44,13 +44,6 @@
                         <input type="text" id="tw-name" required class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Token</label>
-                        <div class="flex gap-2">
-                            <input type="text" id="tw-token-value" readonly class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-600 text-gray-600 dark:text-gray-300 font-mono text-sm">
-                            <button type="button" onclick="tw_revealToken()" class="px-3 py-2 text-sm text-indigo-600 border border-indigo-200 rounded-md hover:bg-indigo-50">Reveal</button>
-                        </div>
-                    </div>
-                    <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Quota Limit</label>
                         <input type="number" id="tw-quota" min="0" placeholder="0 = unlimited" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
                     </div>
@@ -68,7 +61,7 @@
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Expires</label>
                         <input type="datetime-local" id="tw-expires" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
                     </div>
-                    <div>
+                    <div id="tw-status-field">
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
                         <select id="tw-status" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100">
                             <option value="active">Active</option>
@@ -97,12 +90,75 @@
     </div>
 </div>
 
+<!-- Token Created Modal -->
+<div id="tw-created-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 w-full max-w-lg p-6">
+        <h3 class="text-lg font-semibold text-green-700 dark:text-green-400 mb-2">Token Created</h3>
+        <p class="text-sm text-gray-500 mb-4">Copy this token now. It will not be shown again.</p>
+        <div class="flex gap-2 mb-4">
+            <input type="text" id="tw-created-token-value" readonly class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-600 text-gray-800 dark:text-gray-100 font-mono text-sm">
+            <button onclick="tw_copyCreatedToken()" class="px-3 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition">Copy</button>
+        </div>
+        <div class="flex justify-end">
+            <button onclick="tw_doneCreatedToken()" class="px-4 py-2 text-sm text-white bg-indigo-600 rounded-md hover:bg-indigo-700">Done</button>
+        </div>
+    </div>
+</div>
+
+<!-- Token Detail Modal -->
+<div id="tw-detail-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 w-full max-w-lg p-6">
+        <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Token Details</h3>
+        <div class="space-y-3">
+            <div>
+                <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Name</label>
+                <p id="tw-detail-name" class="text-sm text-gray-800 dark:text-gray-100 font-medium"></p>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Token</label>
+                <div class="flex gap-2 items-center">
+                    <span id="tw-detail-token" class="text-sm font-mono text-gray-600 dark:text-gray-300"></span>
+                    <button id="tw-detail-reveal-btn" onclick="tw_revealDetailToken()" class="px-2 py-1 text-xs text-indigo-600 border border-indigo-200 rounded hover:bg-indigo-50">Reveal</button>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Quota</label>
+                    <p id="tw-detail-quota" class="text-sm text-gray-800 dark:text-gray-100"></p>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Status</label>
+                    <p id="tw-detail-status" class="text-sm text-gray-800 dark:text-gray-100"></p>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Created</label>
+                    <p id="tw-detail-created" class="text-sm text-gray-800 dark:text-gray-100"></p>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Expires</label>
+                    <p id="tw-detail-expires" class="text-sm text-gray-800 dark:text-gray-100"></p>
+                </div>
+                <div class="col-span-2">
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Last Used</label>
+                    <p id="tw-detail-last-used" class="text-sm text-gray-800 dark:text-gray-100"></p>
+                </div>
+                <div class="col-span-2">
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">Allowed Models</label>
+                    <p id="tw-detail-models" class="text-sm text-gray-800 dark:text-gray-100"></p>
+                </div>
+            </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-2">
+            <button onclick="tw_closeDetailModal()" class="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50">Close</button>
+        </div>
+    </div>
+</div>
+
 <script>
 // ---- Token Widget State ----
 var twTokens = [];
 var twModelMap = {};
 var twDeleteId = null;
-var twRevealed = false;
 
 // ---- Init ----
 (function() {
@@ -115,13 +171,12 @@ function tw_api(path) {
 }
 
 function tw_loadModelMap() {
-    return $.get(tw_api('/model-agent-map')).then(function(data) {
-        twModelMap = data.map || {};
-    }).fail(function() {
-        return $.get(tw_api('/model-model-map')).then(function(data) {
-            twModelMap = data.map || {};
-        }).fail(function() { twModelMap = {}; });
-    });
+    return $.get('/api/model-router/models').then(function(data) {
+        twModelMap = {};
+        (data.models || []).forEach(function(m) {
+            twModelMap[m.id || m.model_name] = m.name || m.id || m.model_name;
+        });
+    }).fail(function() { twModelMap = {}; });
 }
 
 function tw_loadTokens() {
@@ -163,7 +218,7 @@ function tw_renderTable() {
         var quota = t.quota_limit !== null ? (t.quota_used || 0) + '/' + t.quota_limit : 'Unlimited';
 
         $tbody.append(
-            '<tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">' +
+            '<tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" onclick="tw_openDetailModal(' + t.id + ')">' +
             '<td class="px-4 py-3 font-medium text-gray-800 dark:text-gray-100">' + tw_esc(t.name) + '</td>' +
             '<td class="px-4 py-3 font-mono text-xs text-gray-500" title="' + tw_esc(t.token_preview) + '">...' + (t.token_preview || '****').slice(-4) + '</td>' +
             '<td class="px-4 py-3 text-gray-600 dark:text-gray-300">' + quota + '</td>' +
@@ -171,7 +226,7 @@ function tw_renderTable() {
             '<td class="px-4 py-3"><span class="px-2 py-1 rounded-full text-xs font-medium ' + statusClass + '">' + t.status + '</span></td>' +
             '<td class="px-4 py-3 text-gray-600 dark:text-gray-300 text-xs">' + expires + '</td>' +
             '<td class="px-4 py-3 text-gray-600 dark:text-gray-300 text-xs">' + lastUsed + '</td>' +
-            '<td class="px-4 py-3">' +
+            '<td class="px-4 py-3" onclick="event.stopPropagation()">' +
             '<button onclick="tw_editToken(' + t.id + ')" class="text-indigo-600 hover:text-indigo-800 text-xs mr-2">Edit</button>' +
             '<button onclick="tw_deleteToken(' + t.id + ')" class="text-red-600 hover:text-red-800 text-xs">Delete</button>' +
             '</td></tr>'
@@ -189,26 +244,17 @@ function tw_openModal(id) {
         $('#tw-modal-title').text('Edit Token');
         $('#tw-token-id').val(t.id);
         $('#tw-name').val(t.name);
-        $('#tw-token-value').val('...' + (t.token_preview || '').slice(-4));
         $('#tw-quota').val(t.quota_limit || '');
         $('#tw-status').val(t.status);
+        $('#tw-status-field').removeClass('hidden');
         $('#tw-expires').val(t.expires_at ? t.expires_at.slice(0, 16) : '');
-        tw_revealToken = function() {
-            $('#tw-token-value').val(t.token_preview || '');
-            twRevealed = true;
-        };
-        tw_revealToken();
-        tw_revealToken = function() {};
     } else {
         $('#tw-modal-title').text('Create Token');
         $('#tw-token-id').val('');
         $('#tw-name').val('');
-        $('#tw-token-value').val('');
         $('#tw-quota').val('');
-        $('#tw-status').val('active');
         $('#tw-expires').val('');
-        twRevealed = false;
-        tw_revealToken = function() {};
+        $('#tw-status-field').addClass('hidden');
     }
     tw_renderModelChecks(id ? t.allowed_models || [] : []);
 }
@@ -226,7 +272,10 @@ function tw_renderModelChecks(selected) {
     var $container = $('#tw-model-checks');
     $container.empty();
     var models = Object.keys(twModelMap).sort();
-    if (models.length === 0) models = ['gpt-4', 'gpt-3.5-turbo', 'claude-3-opus', 'claude-3-sonnet'];
+    if (models.length === 0) {
+        $container.append('<span class="text-xs text-gray-400">No models configured.</span>');
+        return;
+    }
     models.forEach(function(m) {
         var checked = selected.includes(m) ? 'checked' : '';
         $container.append(
@@ -249,15 +298,25 @@ function tw_save(e) {
         name: $('#tw-name').val(),
         quota_limit: $('#tw-quota').val() ? parseInt($('#tw-quota').val()) : null,
         allowed_models: tw_getCheckedModels(),
-        expires_at: $('#tw-expires').val() || null,
-        status: $('#tw-status').val()
+        expires_at: $('#tw-expires').val() || null
     };
     var btn = $('#tw-save-btn');
     btn.prop('disabled', true).text('Saving...');
     var method = id ? 'PUT' : 'POST';
     var url = id ? tw_api('/tokens/' + id) : tw_api('/tokens');
+    if (id) {
+        data.status = $('#tw-status').val();
+    }
     $.ajax({ url: url, method: method, contentType: 'application/json', data: JSON.stringify(data) })
-    .done(function() { tw_closeModal(); tw_loadTokens(); })
+    .done(function(resp) {
+        tw_closeModal();
+        if (!id && resp && resp.plaintext) {
+            $('#tw-created-token-value').val(resp.plaintext);
+            $('#tw-created-modal').removeClass('hidden');
+        } else {
+            tw_loadTokens();
+        }
+    })
     .fail(function(xhr) { alert(xhr.responseJSON ? xhr.responseJSON.error : 'Failed to save token'); })
     .always(function() { btn.prop('disabled', false).text('Save'); });
 }
@@ -278,6 +337,63 @@ function tw_confirmDelete() {
     $.ajax({ url: tw_api('/tokens/' + twDeleteId), method: 'DELETE' })
     .done(function() { tw_closeDeleteModal(); tw_loadTokens(); })
     .fail(function(xhr) { alert(xhr.responseJSON ? xhr.responseJSON.error : 'Failed to delete token'); });
+}
+
+// ---- Token Created Modal ----
+function tw_copyCreatedToken() {
+    var input = document.getElementById('tw-created-token-value');
+    input.select();
+    document.execCommand('copy');
+}
+
+function tw_doneCreatedToken() {
+    $('#tw-created-modal').addClass('hidden');
+    tw_loadTokens();
+}
+
+// ---- Token Detail Modal ----
+var tw_detailTokenId = null;
+
+function tw_openDetailModal(id) {
+    var t = twTokens.find(function(tok) { return tok.id === id; });
+    if (!t) return;
+    tw_detailTokenId = id;
+    $('#tw-detail-name').text(t.name);
+    $('#tw-detail-token').text('...' + (t.token_preview || '****').slice(-4));
+    $('#tw-detail-reveal-btn').prop('disabled', false).text('Reveal');
+    var quota = t.quota_limit !== null ? (t.quota_used || 0) + ' / ' + t.quota_limit : 'Unlimited';
+    $('#tw-detail-quota').text(quota);
+    $('#tw-detail-status').text(t.status);
+    $('#tw-detail-created').text(t.created_at ? new Date(t.created_at).toLocaleString() : '-');
+    $('#tw-detail-expires').text(t.expires_at ? new Date(t.expires_at).toLocaleDateString() : 'Never');
+    $('#tw-detail-last-used').text(t.last_used_at ? tw_timeAgo(t.last_used_at) : 'Never');
+    var models = t.allowed_models && t.allowed_models.length > 0 ? t.allowed_models.join(', ') : 'All models';
+    $('#tw-detail-models').text(models);
+    $('#tw-detail-modal').removeClass('hidden');
+}
+
+function tw_revealDetailToken() {
+    if (!tw_detailTokenId) return;
+    var btn = $('#tw-detail-reveal-btn');
+    btn.prop('disabled', true).text('Loading...');
+    $.get(tw_api('/tokens/' + tw_detailTokenId + '/reveal'))
+    .done(function(data) {
+        if (data && data.plaintext) {
+            $('#tw-detail-token').text(data.plaintext);
+            btn.text('Revealed');
+        } else {
+            btn.text('Not available');
+        }
+    })
+    .fail(function() {
+        $('#tw-detail-token').text('Not available (token not cached)');
+        btn.text('Not available');
+    });
+}
+
+function tw_closeDetailModal() {
+    $('#tw-detail-modal').addClass('hidden');
+    tw_detailTokenId = null;
 }
 
 // ---- Helpers ----

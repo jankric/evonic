@@ -338,6 +338,17 @@ class TokenDB:
             return [dict(row) for row in cursor.fetchall()]
 
 
+    def get_usage_count(self, token_id: int) -> int:
+        """Return total number of usage log entries for a token."""
+        with self._connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) as cnt FROM api_usage_log WHERE token_id = ?
+            """, (token_id,))
+            row = cursor.fetchone()
+            return row['cnt'] if row else 0
+
+
 # Singleton
 token_db = TokenDB()
 
@@ -354,9 +365,9 @@ def init_plugin_config():
         if existing is not None and existing.strip() and existing.strip() != '{}':
             return  # Already configured
         
-        # Get enabled models
-        models = db.get_llm_models()
-        enabled_models = [m['model_name'] for m in models if m.get('enabled', 1)]
+        # Get enabled models using SDK function
+        models = db.get_enabled_llm_models()
+        enabled_models = [m['model_name'] for m in models]
         
         if enabled_models:
             # Create a map where alias == model_name

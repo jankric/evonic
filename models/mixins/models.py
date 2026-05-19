@@ -13,6 +13,14 @@ class ModelsMixin:
             cursor.execute("SELECT * FROM llm_models ORDER BY name")
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_enabled_llm_models(self) -> List[Dict[str, Any]]:
+        """Return list of only enabled model configs (enabled=1)."""
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM llm_models WHERE enabled = 1 ORDER BY name")
+            return [dict(row) for row in cursor.fetchall()]
+
     def save_llm_models(self, models_list: List[Dict[str, Any]]) -> None:
         """Persist models to llm_models table."""
         with self._connect() as conn:

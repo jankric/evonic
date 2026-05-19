@@ -141,6 +141,7 @@ preferences, and communication style instructions.
   "User dislikes emoji")
 - Personal instructions (e.g. "Call the user 'Pak'")
 - Tastes and preferences (e.g. "User prefers bullet points over paragraphs")
+- Execution instructions (e.g. "Always use tmux/screen/nohup for long-running programs like cmake/make build, unit testing, benchmarking, etc.")
 
 ## What NOT to store here (use `remember` instead)
 
