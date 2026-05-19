@@ -18,6 +18,11 @@ from backend.tools._workspace import resolve_workspace_path
 SEARCH_WINDOW = 50
 
 
+def _unescape_llm(s: str) -> str:
+    """Remove common LLM double-escaping from a string."""
+    return s.replace('\\"', '"').replace("\\'", "'")
+
+
 # ---------------------------------------------------------------------------
 # Patch parser
 # ---------------------------------------------------------------------------
@@ -127,10 +132,12 @@ def _find_hunk_pos(lines: list, hunk_lines: list, stated_pos: int,
       1. Exact match (trailing whitespace stripped) within ±SEARCH_WINDOW
       2. Indent-tolerant match (all whitespace stripped) within ±SEARCH_WINDOW
       3. Indent-tolerant match across the entire file
+      4. Unescape-tolerant match (handles LLM double-escaping like \\" → ")
 
     `lines` may contain line endings or bare strings — both are handled.
 
-    Returns (pos, None) on success, (-1, None) if no match found.
+    Returns (pos, None) on success, (pos, 'unescape') when matched via
+    unescape-tolerant tier, or (-1, None) if no match found.
     """
     to_match = [(op, txt) for op, txt, _ in hunk_lines if op in (' ', '-')]
 
@@ -181,6 +188,18 @@ def _find_hunk_pos(lines: list, hunk_lines: list, stated_pos: int,
         ):
             return (pos, None)
 
+    # --- Tier 4: unescape-tolerant match (LLM double-escaping) ---
+    # LLMs sometimes emit \" or \' in patch context when the file has " or '.
+    match_unesc = [_unescape_llm(txt).rstrip() for _, txt in to_match]
+    if match_unesc != [txt.rstrip() for _, txt in to_match]:
+        lines_rstripped = [l.rstrip('\r\n').rstrip() for l in lines]
+        for pos in range(len(lines_rstripped) - match_len + 1):
+            if all(
+                lines_rstripped[pos + i] == match_unesc[i]
+                for i in range(match_len)
+            ):
+                return (pos, 'unescape')
+
     return (-1, None)
 
 
@@ -230,7 +249,7 @@ def _apply_hunks_to_content(raw: str, patch_text: str) -> dict:
 
         # ── Context hunk: find matching position ──
         stated_pos = hunk['old_start'] - 1 + offset
-        pos, _ = _find_hunk_pos(lines, hunk_lines, stated_pos, fuzzy=True)
+        pos, match_hint = _find_hunk_pos(lines, hunk_lines, stated_pos, fuzzy=True)
 
         if pos == -1:
             anchor = _find_first_anchor(lines, hunk_lines)
@@ -263,6 +282,7 @@ def _apply_hunks_to_content(raw: str, patch_text: str) -> dict:
             }
 
         # ── Apply the hunk ──
+        needs_unescape = match_hint == 'unescape'
         result_lines = []
         file_idx = pos
         for op, txt, _ in hunk_lines:
@@ -272,7 +292,7 @@ def _apply_hunks_to_content(raw: str, patch_text: str) -> dict:
             elif op == '-':
                 file_idx += 1
             elif op == '+':
-                result_lines.append(txt)
+                result_lines.append(_unescape_llm(txt) if needs_unescape else txt)
 
         consumed = sum(1 for op, _, _ in hunk_lines if op in (' ', '-'))
         produced = sum(1 for op, _, _ in hunk_lines if op in (' ', '+'))
@@ -353,7 +373,7 @@ def apply_hunks(file_path: str, patch_text: str) -> dict:
 
         # ── Context hunk: find matching position ──────────────────────────
         stated_pos = hunk['old_start'] - 1 + offset
-        pos, _ = _find_hunk_pos(lines, hunk_lines, stated_pos, fuzzy=True)
+        pos, match_hint = _find_hunk_pos(lines, hunk_lines, stated_pos, fuzzy=True)
 
         if pos == -1:
             # Build a helpful error message.
@@ -388,6 +408,7 @@ def apply_hunks(file_path: str, patch_text: str) -> dict:
             }
 
         # ── Apply the hunk ─────────────────────────────────────────────────
+        needs_unescape = match_hint == 'unescape'
         result_lines = []
         file_idx = pos
         for op, txt, _ in hunk_lines:
@@ -397,7 +418,7 @@ def apply_hunks(file_path: str, patch_text: str) -> dict:
             elif op == '-':
                 file_idx += 1
             elif op == '+':
-                result_lines.append(txt)
+                result_lines.append(_unescape_llm(txt) if needs_unescape else txt)
 
         consumed = sum(1 for op, _, _ in hunk_lines if op in (' ', '-'))
         produced = sum(1 for op, _, _ in hunk_lines if op in (' ', '+'))
@@ -717,6 +738,23 @@ def test_execute():
     r = apply_hunks(tmp, '@@ -1,2 +1,2 @@\n target line\n-after target\n+REPLACED\n')
     assert r['result'] == 'success', r
     assert 'REPLACED' in read_file(tmp)
+    passed += 1
+
+    print('Test 13: LLM double-escaped quotes in context')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write('def foo():\n    """A docstring."""\n    x = 1\n    return x\n')
+    r = apply_hunks(tmp, '@@ -1,4 +1,4 @@\n def foo():\n     \\"\\"\\"A docstring.\\"\\"\\"\n-    x = 1\n+    x = 2\n     return x\n')
+    assert r['result'] == 'success', r
+    assert 'x = 2' in read_file(tmp)
+    assert '"""A docstring."""' in read_file(tmp)  # docstring preserved from file
+    passed += 1
+
+    print('Test 14: LLM double-escaped quotes in added lines')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write('def bar():\n    """Old doc."""\n    pass\n')
+    r = apply_hunks(tmp, '@@ -1,3 +1,3 @@\n def bar():\n-    \\"\\"\\"Old doc.\\"\\"\\"\n+    \\"\\"\\"New doc.\\"\\"\\"\n     pass\n')
+    assert r['result'] == 'success', r
+    assert '"""New doc."""' in read_file(tmp)  # unescaped in output
     passed += 1
 
     os.unlink(tmp)
