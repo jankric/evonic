@@ -42,6 +42,33 @@ class CloudWorkplaceBackend(ExecutionBackend):
         self._results: dict[str, dict] = {}
         self._rpc_lock = threading.Lock()
 
+    def resolve_path(self, path: str) -> str:
+        """Remap server-resolved paths to the remote Evonet workspace.
+
+        resolve_workspace_path may have resolved a relative or /workspace-prefixed
+        path against the server-side SANDBOX_WORKSPACE.  Detect that and remap to
+        the remote workspace so the Evonet executor receives a correct path.
+        """
+        if not self._workspace or not path:
+            return path
+
+        import os
+        try:
+            from config import SANDBOX_WORKSPACE as server_root
+        except ImportError:
+            server_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), '..', '..', '..')
+            )
+        server_root = os.path.abspath(server_root)
+
+        if path.startswith(server_root + os.sep):
+            rel = path[len(server_root) + 1:]
+            return self._workspace.rstrip('/') + '/' + rel
+        if path == server_root:
+            return self._workspace
+
+        return path
+
     # -------------------------------------------------------------------------
     # Called by ConnectorRelay when Evonet connects / disconnects
     # -------------------------------------------------------------------------
