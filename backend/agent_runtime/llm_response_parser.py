@@ -94,6 +94,23 @@ CONTINUATION_NUDGE = (
 MAX_CONTINUATION_NUDGES = 3
 
 
+def should_nudge_continuation(content: str, nudge_count: int) -> str:
+    """Decide what the loop should do for a no-tool-call response.
+
+    Returns:
+        "nudge"   – inject a continuation nudge and re-enter the loop
+        "final"   – treat the response as the final answer (PLANNING_RE negated)
+        "none"    – no continuation phrase detected; fall through normally
+    """
+    if not content or nudge_count >= MAX_CONTINUATION_NUDGES:
+        return "none"
+    if not CONTINUATION_RE.search(content):
+        return "none"
+    if PLANNING_RE.search(content):
+        return "final"
+    return "nudge"
+
+
 # ── Emergency compaction ────────────────────────────────────────────────────
 
 def _emergency_compact_messages(messages: list, llm, llm_lock: threading.Lock,
