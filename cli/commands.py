@@ -173,10 +173,10 @@ def start_server(port=None, host=None, debug=None, daemon=False):
             if _is_running(proc.pid):
                 print(f"Supervisor started (PID: {proc.pid})")
                 print(
-                    f"Server akan berjalan dari current release dengan self-update otomatis"
+                    f"Server will run from the current release with automatic self-update"
                 )
             else:
-                print("Gagal start supervisor. Cek log untuk detail.")
+                print("Failed to start supervisor. Check the log for details.")
                 sys.exit(1)
             return
 
@@ -3181,7 +3181,7 @@ def channel_approve(pair_code):
     success = db.approve_pending(pending["id"])
     if success:
         print(
-            f"✅ User {pending['external_user_id']} berhasil ditambahkan ke allowlist"
+            f"✅ User {pending['external_user_id']} has been added to the allowlist"
         )
     else:
         print("❌ Failed to approve pairing request.")
