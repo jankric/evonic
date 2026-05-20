@@ -478,7 +478,7 @@ def main():
     )
     backup_parser.add_argument(
         "--output", "-o", type=str, default=None,
-        help="Output file path (default: evonic-backup-<version>-<timestamp>.tar.gz)"
+        help="Output file path (default: evonic-backup-YYYYMMDD-HHMM.tar.gz)"
     )
     backup_parser.add_argument(
         "--format", type=str, default="gz", choices=["gz", "bz2", "zip"],
