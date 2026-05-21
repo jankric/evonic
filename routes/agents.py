@@ -1197,10 +1197,25 @@ def api_chat_agent_state(agent_id):
     agent_data = _json.loads(agent_content) if agent_content else {}
 
     session_id = request.args.get('session_id', '').strip()
+    loaded_skills = []
     if session_id:
         session_content = db.get_session_state(session_id, agent_id=agent_id)
         session_data = _json.loads(session_content) if session_content else {}
         merged = {**agent_data, **session_data}
+
+        # Resolve loaded skills for this session
+        try:
+            from backend.agent_runtime import agent_runtime
+            from backend.skills_manager import skills_manager
+            for sk in agent_runtime.get_session_skills(session_id):
+                sk_id = sk['skill_id']
+                try:
+                    name = skills_manager.get_skill_name(sk_id)
+                except Exception:
+                    name = sk_id  # fallback to skill_id on error
+                loaded_skills.append({'skill_id': sk_id, 'name': name})
+        except Exception:
+            pass
     else:
         merged = agent_data
 
@@ -1243,8 +1258,9 @@ def api_chat_agent_state(agent_id):
             'focus': state.focus,
             'focus_reason': state.focus_reason,
             'active_model': active_model,
+            'loaded_skills': loaded_skills,
         })
-    return jsonify({'mode': None, 'active_model': None})
+    return jsonify({'mode': None, 'active_model': None, 'loaded_skills': loaded_skills})
 
 
 @agents_bp.route('/api/agents/<agent_id>/chat/clear', methods=['POST'])

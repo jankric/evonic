@@ -1339,6 +1339,11 @@ function clearAgentStatePanel() {
     clearAgentState(['agent-state-content', 'mobile-agent-state-content']);
 }
 
+document.addEventListener('evonic:agent-state-changed', function() {
+    loadAgentState();
+    loadSessionSummary();
+});
+
 function toggleMobileSummary() {
     const overlay = document.getElementById('mobile-summary-overlay');
     if (overlay.classList.contains('hidden')) {
