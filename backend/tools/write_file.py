@@ -8,6 +8,46 @@ except ImportError:
     _WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from backend.tools._workspace import resolve_workspace_path
+from backend.tools.lib.safety_pipeline import should_skip_safety
+
+_STR_REPLACE_STEPS = """1. First, call read_file() to see the current content.
+2. Then call {tool} with old_str set to the exact lines you want to change (copy them from read_file's output).
+3. Set new_str to your replacement text.
+Retrying write_file will be refused again."""
+
+_PATCH_STEPS = """1. First, call read_file() to see the current content.
+2. Then call patch with a unified diff containing your changes (use read_file's output as reference).
+3. Ensure the patch has proper @@ hunk headers.
+Retrying write_file will be refused again."""
+
+_EDIT_RECIPE_STR_REPLACE = {
+    'tool': 'str_replace',
+    'old_str': '<READ the file first with read_file, then paste the exact text to replace here>',
+    'new_str': '<your replacement text here>',
+}
+
+_EDIT_RECIPE_PATCH = {
+    'tool': 'patch',
+    'patch': '<READ the file first with read_file, then construct a unified diff patch here>',
+}
+
+
+def _get_edit_suggestion(agent):
+    """Determine which edit tool to suggest based on agent's assigned tools.
+
+    Returns (tool_name_str, edit_recipe_dict).
+    """
+    assigned = set((agent or {}).get('assigned_tool_ids', []))
+    has_str_replace = 'str_replace' in assigned
+    has_patch = 'patch' in assigned
+
+    if has_str_replace and has_patch:
+        return ('str_replace or patch', _EDIT_RECIPE_STR_REPLACE)
+    elif has_patch:
+        return ('patch', _EDIT_RECIPE_PATCH)
+    else:
+        # Default to str_replace (fallback when only str_replace or none assigned)
+        return ('str_replace', _EDIT_RECIPE_STR_REPLACE)
 
 
 def write_file(
@@ -15,6 +55,7 @@ def write_file(
     content: str,
     overwrite: bool = True,
     create_dirs: bool = True,
+    edit_suggestion: tuple = None,
 ) -> dict:
     """
     Write content to a file.
@@ -24,6 +65,7 @@ def write_file(
         content:     Full content to write. Written exactly as provided.
         overwrite:   If False, refuse to write if the file already exists.
         create_dirs: If True, create missing parent directories automatically.
+        edit_suggestion: Optional (tool_name, recipe_dict) from _get_edit_suggestion().
 
     Returns:
         dict with 'result', 'created' on success,
@@ -37,13 +79,37 @@ def write_file(
     abs_path = os.path.abspath(file_path)
     already_exists = os.path.exists(abs_path)
 
-    # Overwrite guard
-    if already_exists and not overwrite:
+    # Resolve edit suggestion: use provided, or derive from what the agent has,
+    # or fall back to str_replace.
+    if edit_suggestion is not None:
+        edit_tool_name, edit_recipe = edit_suggestion
+    else:
+        edit_tool_name, edit_recipe = _get_edit_suggestion(None)
+
+    if edit_tool_name == 'patch':
+        steps = _PATCH_STEPS
+    else:
+        steps = _STR_REPLACE_STEPS
+
+    # Write-vs-Edit guard: Write tool is for NEW files only.
+    # Existing files MUST be modified via str_replace/patch (surgical edits),
+    # never by overwriting the entire file. This invariant forces the
+    # model to make precise, targeted changes instead of lazy wholesale
+    # rewrites — the single highest-impact mechanism from little-coder.
+    if already_exists:
+        error_msg = (
+            f"File already exists: {file_path}. "
+            "The write_file tool is for creating NEW files only — "
+            "it does NOT overwrite existing files. "
+            f"To modify an existing file, use {edit_tool_name} instead.\n"
+            f"{steps}"
+        )
+        recipe = dict(edit_recipe)
+        recipe['file_path'] = file_path
         return {
-            'error': (
-                f"File already exists: {file_path}. "
-                "Set overwrite=true to replace it."
-            )
+            'error': error_msg,
+            'isError': True,
+            'edit_recipe': recipe,
         }
 
     # Create parent directories
@@ -89,6 +155,9 @@ def execute(agent, args: dict) -> dict:
     content = args.get('content')
     overwrite = args.get('overwrite', True)
     create_dirs = args.get('create_dirs', True)
+
+    # Compute dynamic edit tool suggestion based on agent's assigned tools
+    edit_suggestion = _get_edit_suggestion(agent)
 
     # Heuristic safety check: block access to .ssh directory
     if not (agent or {}).get('_skip_safety') and (agent is None or agent.get("safety_checker_enabled", 1)):
@@ -151,6 +220,10 @@ def execute(agent, args: dict) -> dict:
     if isinstance(create_dirs, str):
         create_dirs = create_dirs.lower() not in ('false', '0', 'no')
 
+    # Normalise smart quotes in code content before writing
+    from backend.normalizer import normalize_code_quotes
+    content = normalize_code_quotes(content)
+
     if file_path is None:
         return {'error': "Missing required argument: 'file_path'"}
     if content is None:
@@ -163,7 +236,7 @@ def execute(agent, args: dict) -> dict:
         local_path = resolve_self_path(agent_id, file_path)
         if not local_path:
             return {'error': "Access denied — path escapes agent directory."}
-        return write_file(local_path, content, overwrite=overwrite, create_dirs=create_dirs)
+        return write_file(local_path, content, overwrite=overwrite, create_dirs=create_dirs, edit_suggestion=edit_suggestion)
 
     # /_portal/ path: route through a virtual path mapping to local/SSH/evonet.
     from backend.tools._portal import is_portal_path, resolve_portal_path
@@ -172,12 +245,25 @@ def execute(agent, args: dict) -> dict:
         if backend is None:
             return {'error': real_path}  # error message
         already_exists = backend.file_exists(real_path)
-        if not overwrite and already_exists:
+        if already_exists:
+            edit_tool_name, edit_recipe = edit_suggestion
+            if edit_tool_name == 'patch':
+                steps = _PATCH_STEPS
+            else:
+                steps = _STR_REPLACE_STEPS
+            error_msg = (
+                f"File already exists: {file_path}. "
+                "The write_file tool is for creating NEW files only — "
+                "it does NOT overwrite existing files. "
+                f"To modify an existing file, use {edit_tool_name} instead.\n"
+                f"{steps}"
+            )
+            recipe = dict(edit_recipe)
+            recipe['file_path'] = file_path
             return {
-                'error': (
-                    f"File already exists: {file_path}. "
-                    "Set overwrite=true to replace it."
-                )
+                'error': error_msg,
+                'isError': True,
+                'edit_recipe': recipe,
             }
         parent = real_path.rsplit("/", 1)[0] if "/" in real_path else ""
         if parent and create_dirs and not backend.file_exists(parent):
@@ -210,13 +296,26 @@ def execute(agent, args: dict) -> dict:
         target_path = backend.resolve_path(target_path)
         already_exists = backend.file_exists(target_path)
 
-        # Overwrite guard
-        if not overwrite and already_exists:
+        # Write-vs-Edit guard: Write tool is for NEW files only.
+        if already_exists:
+            edit_tool_name, edit_recipe = edit_suggestion
+            if edit_tool_name == 'patch':
+                steps = _PATCH_STEPS
+            else:
+                steps = _STR_REPLACE_STEPS
+            error_msg = (
+                f"File already exists: {file_path}. "
+                "The write_file tool is for creating NEW files only — "
+                "it does NOT overwrite existing files. "
+                f"To modify an existing file, use {edit_tool_name} instead.\n"
+                f"{steps}"
+            )
+            recipe = dict(edit_recipe)
+            recipe['file_path'] = file_path
             return {
-                'error': (
-                    f"File already exists: {file_path}. "
-                    "Set overwrite=true to replace it."
-                )
+                'error': error_msg,
+                'isError': True,
+                'edit_recipe': recipe,
             }
 
         # Create parent directories if needed
@@ -239,7 +338,7 @@ def execute(agent, args: dict) -> dict:
 
     # No sandbox — direct host filesystem access (original behavior)
     file_path = resolve_workspace_path(agent, file_path, _WORKSPACE_ROOT)
-    return write_file(file_path, content, overwrite=overwrite, create_dirs=create_dirs)
+    return write_file(file_path, content, overwrite=overwrite, create_dirs=create_dirs, edit_suggestion=edit_suggestion)
 
 
 # ---------------------------------------------------------------------------
@@ -266,22 +365,26 @@ def test_execute():
     passed += 1
 
     # ------------------------------------------------------------------
-    print('Test 2: Overwrite an existing file')
+    print('Test 2: Write-vs-Edit guard refuses existing file (overwrite default)')
     r = write_file(p, 'new content\n')
-    assert r['result'] == 'success', r
-    assert r['created'] is False, r
-    assert open(p).read() == 'new content\n'
+    assert 'error' in r, r
+    assert r.get('isError') is True, r
+    assert 'edit_recipe' in r, r
+    assert r['edit_recipe']['tool'] == 'str_replace', r
+    assert open(p).read() == 'hello world\n'  # unchanged
     passed += 1
 
     # ------------------------------------------------------------------
-    print('Test 3: overwrite=False blocks existing file')
+    print('Test 3: Write-vs-Edit guard refuses existing file (overwrite=False)')
     r = write_file(p, 'blocked', overwrite=False)
     assert 'error' in r, r
-    assert open(p).read() == 'new content\n'  # unchanged
+    assert r.get('isError') is True, r
+    assert 'edit_recipe' in r, r
+    assert open(p).read() == 'hello world\n'  # unchanged
     passed += 1
 
     # ------------------------------------------------------------------
-    print('Test 4: overwrite=False allows creating a new file')
+    print('Test 4: Write creates a new file')
     p2 = path('brand_new.txt')
     r = write_file(p2, 'fresh', overwrite=False)
     assert r['result'] == 'success', r

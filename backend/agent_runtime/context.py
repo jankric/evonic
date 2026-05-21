@@ -4,12 +4,25 @@ context.py — builds LLM input: system prompt, tool list, message formatting.
 Pure data preparation — no LLM calls, no threading.
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List
 
+import tiktoken
+
 _logger = logging.getLogger(__name__)
+
+_TIKTOKEN_ENCODING = None
+
+
+def _token_count(text: str) -> int:
+    """Count tokens using tiktoken cl100k_base encoding."""
+    global _TIKTOKEN_ENCODING
+    if _TIKTOKEN_ENCODING is None:
+        _TIKTOKEN_ENCODING = tiktoken.get_encoding("cl100k_base")
+    return len(_TIKTOKEN_ENCODING.encode(text))
 
 from models.db import db
 from backend.tools import tool_registry
@@ -147,6 +160,9 @@ def _build_static_prompt(agent: Dict[str, Any]) -> str:
                 seen_fn_names.add(fn_name)
                 tool_prompt = tool_def.get('system_prompt', '').strip()
                 if tool_prompt:
+                    if not agent.get('sandbox_enabled'):
+                        tool_prompt = tool_prompt.replace('/workspace/shared/agents/', '')
+                        tool_prompt = tool_prompt.replace('/workspace', 'the agents working directory')
                     parts.append(tool_prompt)
 
     # List available KB files so the agent knows what it can read
@@ -457,6 +473,22 @@ def build_tools(agent: Dict[str, Any]) -> List[Dict[str, Any]]:
         from backend.tools.super_agent_tools import get_super_agent_tool_defs
         tools.extend(get_super_agent_tool_defs())
 
+    # Super agent gets ALL skill tools automatically — no per-skill assignment needed
+    if agent.get('is_super'):
+        seen_fn_names = {t['function']['name'] for t in tools if t.get('function', {}).get('name')}
+        for tool_def in tool_registry.get_all_tool_defs():
+            tool_id = tool_def.get('id', '')
+            fn_name = tool_def.get('function', {}).get('name', '')
+            if not tool_id.startswith('skill:') or not fn_name:
+                continue
+            if fn_name in seen_fn_names:
+                continue
+            seen_fn_names.add(fn_name)
+            tools.append({
+                "type": "function",
+                "function": tool_def['function']
+            })
+
     # Agent messaging tools — available to super agent and agents with messaging enabled
     if agent.get('is_super') or agent.get('agent_messaging_enabled') != 0:
         from backend.tools.agent_messaging import get_agent_messaging_tool_defs
@@ -467,7 +499,7 @@ def build_tools(agent: Dict[str, Any]) -> List[Dict[str, Any]]:
     eid = _effective_id(agent)
     assigned_ids = set(db.get_agent_tools(eid))
     if assigned_ids:
-        seen_fn_names = set()
+        seen_fn_names = {t['function']['name'] for t in tools if t.get('function', {}).get('name')}
         for tool_def in tool_registry.get_all_tool_defs():
             tool_id = tool_def.get('id', '')
             fn_name = tool_def.get('function', {}).get('name', '')
@@ -482,18 +514,98 @@ def build_tools(agent: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "function": tool_def['function']
                 })
 
+    # ── Patch /workspace references for non-sandbox (workplace) agents ──
+    # Tool JSON definitions contain /workspace paths in function descriptions
+    # and parameter descriptions. Workplace agents are misled into trying to
+    # use paths that don't exist on their system.
+    if not agent.get('sandbox_enabled'):
+        for tool in tools:
+            func = tool.get('function', {})
+            # Patch function-level description
+            if 'description' in func and '/workspace' in func['description']:
+                func['description'] = func['description'].replace('/workspace', 'the agents working directory')
+            # Patch parameter descriptions
+            for param_name, param_def in func.get('parameters', {}).get('properties', {}).items():
+                if isinstance(param_def, dict) and 'description' in param_def:
+                    if '/workspace' in param_def['description']:
+                        param_def['description'] = param_def['description'].replace('/workspace', 'the agents working directory')
     return tools
 
 
-def get_compiled_context(agent_id: str) -> dict:
-    """Return the compiled system prompt and tool definitions for an agent."""
+def get_compiled_context(agent_id: str, user_id: str = None) -> dict:
+    """Return the compiled system prompt, tool definitions, token estimates,
+    and optionally the actual LLM context (memories + prior summary)."""
     agent = db.get_agent(agent_id)
     if not agent:
-        return {"system_prompt": "", "tools": []}
-    return {
-        "system_prompt": build_system_prompt(agent),
-        "tools": build_tools(agent)
+        return {"system_prompt": "", "tools": [], "tokens": {"system_prompt": 0, "tool_definitions": 0, "total": 0}}
+
+    system_prompt = build_system_prompt(agent)
+    tools = build_tools(agent)
+
+    # Token estimates using tiktoken cl100k_base
+    sp_tokens = _token_count(system_prompt)
+    tool_tokens = _token_count(json.dumps(tools))
+
+    result = {
+        "system_prompt": system_prompt,
+        "tools": tools,
+        "tokens": {
+            "system_prompt": sp_tokens,
+            "tool_definitions": tool_tokens,
+            "total": sp_tokens + tool_tokens,
+        }
     }
+
+    # If user_id provided, also return memories and summary (actual LLM context extras)
+    if user_id:
+        from backend.agent_runtime.memory_manager import get_memories_for_context
+        session_id = db.get_or_create_session(agent_id, user_id)
+        fake_messages = [{"role": "system", "content": system_prompt}]
+        memory_text = get_memories_for_context(agent_id, fake_messages)
+        mem_tokens = 0
+        if memory_text:
+            result["memories"] = memory_text
+            mem_tokens = _token_count(memory_text)
+            result["tokens"]["memories"] = mem_tokens
+
+        summary_record = db.get_summary(session_id, agent_id=agent_id)
+        sum_tokens = 0
+        if summary_record:
+            summary_text = f"## Prior conversation summary\n{summary_record['summary']}"
+            result["summary"] = summary_text
+            sum_tokens = _token_count(summary_text)
+            result["tokens"]["summary"] = sum_tokens
+
+        # Recalculate total to include memories and summary
+        result["tokens"]["total"] = sp_tokens + tool_tokens + mem_tokens + sum_tokens
+
+    return result
+
+
+def command_hint_from_content(content: str) -> str:
+    """Extract a command hint from a serialized tool result JSON string.
+
+    Used by build_message_entry() to route tool output through RTK compression.
+    Falls back to "unknown" if the content format is unrecognizable.
+    """
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return "unknown"
+
+    if not isinstance(data, dict):
+        return "unknown"
+
+    # read_file: has file_path
+    if "file_path" in data:
+        return "read_file"
+
+    # bash/runpy/exec tools: have exit_code + stdout/stderr
+    if "exit_code" in data and ("stdout" in data or "stderr" in data):
+        return "bash"
+
+    # catch-all for any other structured dict
+    return "unknown"
 
 
 def build_message_entry(msg: dict, agent: dict) -> dict:
@@ -512,11 +624,27 @@ def build_message_entry(msg: dict, agent: dict) -> dict:
         entry['content'] = parts
     elif msg.get('content'):
         content = msg['content']
-        # Safety net: re-truncate legacy DB entries that were stored untruncated
+        # Safety net: try RTK compression before falling back to blunt truncation.
+        # Covers legacy DB entries and code paths that reach here outside llm_loop.
         if msg.get('role') == 'tool' and len(content) > MAX_TOOL_RESULT_CHARS:
-            remaining = len(content) - MAX_TOOL_RESULT_CHARS
-            content = (content[:MAX_TOOL_RESULT_CHARS] +
-                       f"\n...[truncated — {remaining} chars omitted]")
+            try:
+                from backend.token_compressor.compressor_registry import get_registry
+                reg = get_registry()
+                hint = command_hint_from_content(content)
+                # Assume exit_code=0 — we don't have it when reading from DB
+                compressed = reg.compress(hint, 0, content)
+                # Only use compressed result if it differs (filter actually matched)
+                if compressed != content:
+                    content = compressed
+            except Exception:
+                # Fail-open: fall through to old truncation behavior
+                pass
+
+            # Still apply blunt truncation if RTK didn't shrink enough
+            if len(content) > MAX_TOOL_RESULT_CHARS:
+                remaining = len(content) - MAX_TOOL_RESULT_CHARS
+                content = (content[:MAX_TOOL_RESULT_CHARS] +
+                           f"\n...[truncated — {remaining} chars omitted]")
         entry['content'] = content
     if msg.get('tool_calls'):
         entry['tool_calls'] = msg['tool_calls']

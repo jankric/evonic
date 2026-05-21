@@ -83,6 +83,7 @@
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Action Type</label>
                         <select id="f-action-type" onchange="onActionTypeChange()" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none">
                             <option value="agent_message">Agent Message</option>
+                            <option value="session_prompt">Session Prompt</option>
                             <option value="emit_event">Emit Event</option>
                             <option value="webhook">Webhook</option>
                         </select>
@@ -118,6 +119,13 @@
                     </select>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 mt-3">Message</label>
                     <textarea id="f-agent-msg" rows="3" placeholder="Message to send to the agent" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none resize-none"></textarea>
+                </div>
+                <div id="action-session-prompt-fields" class="hidden">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Agent ID</label>
+                    <select id="f-session-agent-id" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none">
+                    </select>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 mt-3">Prompt</label>
+                    <textarea id="f-session-msg" rows="4" placeholder="Prompt to submit to the LLM session" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none resize-none"></textarea>
                 </div>
                 <div id="action-event-fields" class="hidden">
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Event Name</label>
@@ -187,6 +195,7 @@ function triggerLabel(s) {
 
 function actionLabel(s) {
     if (s.action_type === 'agent_message') return `Msg -> ${esc(s.action_config.agent_id || '?')}`;
+    if (s.action_type === 'session_prompt') return `Session -> ${esc(s.action_config.agent_id || '?')}`;
     if (s.action_type === 'emit_event') return `Event: ${esc(s.action_config.event_name || '?')}`;
     if (s.action_type === 'webhook') return `${s.action_config.method||'POST'} ${esc((s.action_config.url||'').substring(0,30))}`;
     return s.action_type;
@@ -312,6 +321,7 @@ function onTriggerTypeChange() {
 function onActionTypeChange() {
     const a = document.getElementById('f-action-type').value;
     document.getElementById('action-agent-fields').classList.toggle('hidden', a !== 'agent_message');
+    document.getElementById('action-session-prompt-fields').classList.toggle('hidden', a !== 'session_prompt');
     document.getElementById('action-event-fields').classList.toggle('hidden', a !== 'emit_event');
     document.getElementById('action-webhook-fields').classList.toggle('hidden', a !== 'webhook');
 }
@@ -322,9 +332,12 @@ async function loadAgents() {
     try {
         const res = await fetch('/api/agents');
         const data = await res.json();
-        sel.innerHTML = (data.agents || []).map(a =>
+        const options = (data.agents || []).map(a =>
             `<option value="${esc(a.id)}">${esc(a.name || a.id)}</option>`
         ).join('');
+        sel.innerHTML = options;
+        const sel2 = document.getElementById('f-session-agent-id');
+        if (sel2) sel2.innerHTML = options;
     } catch {}
 }
 
@@ -356,6 +369,12 @@ async function createSchedule() {
             message: document.getElementById('f-agent-msg').value.trim(),
         };
         if (!actionConfig.message) return alert('Message is required');
+    } else if (actionType === 'session_prompt') {
+        actionConfig = {
+            agent_id: document.getElementById('f-session-agent-id').value,
+            message: document.getElementById('f-session-msg').value.trim(),
+        };
+        if (!actionConfig.message) return alert('Prompt is required');
     } else if (actionType === 'emit_event') {
         actionConfig = {
             event_name: document.getElementById('f-event-name').value.trim(),

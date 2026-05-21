@@ -106,6 +106,11 @@ class AgentChatDB:
                 cursor.execute("ALTER TABLE chat_sessions ADD COLUMN archived BOOLEAN DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
+            # Migration: add user_id column for UserMixin integration
+            try:
+                cursor.execute("ALTER TABLE chat_sessions ADD COLUMN user_id TEXT REFERENCES users(id)")
+            except sqlite3.OperationalError:
+                pass
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS agent_state (
                     session_id TEXT PRIMARY KEY,

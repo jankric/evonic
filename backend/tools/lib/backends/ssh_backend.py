@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 _MAX_OUTPUT_BYTES = 64 * 1024  # 64 KB
 _MAX_RETRIES = 5
 
+# Path to local runpy_helpers directory (evonic package) for uploading to remote.
+_HELPERS_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', 'runpy_helpers'))
+_REMOTE_EVONIC_DIR = '~/.evonic/evonic'
+
 
 class SSHBackend(ExecutionBackend):
     """Executes bash/python on a remote server via SSH."""
@@ -318,8 +322,13 @@ class SSHBackend(ExecutionBackend):
         return self._tracked_exec('bash -s', env_prefix + script, timeout)
 
     def run_python(self, code: str, timeout: int, env: dict) -> dict:
+        self._ensure_evonic_on_remote()
+        remote_dir = os.path.expanduser(_REMOTE_EVONIC_DIR)
+        merged = dict(env or {})
+        existing = merged.get('PYTHONPATH', '')
+        merged['PYTHONPATH'] = f'{remote_dir}:{existing}'.rstrip(':')
         env_prefix = ''.join(
-            f"export {k}={_shell_quote(v)}\n" for k, v in env.items()
+            f"export {k}={_shell_quote(v)}\n" for k, v in merged.items()
         )
         # Wrap: set env vars in shell, then pipe code to python3
         wrapper = env_prefix + 'python3 -'
@@ -357,6 +366,54 @@ class SSHBackend(ExecutionBackend):
         if r.get('exit_code', 1) != 0:
             return {'error': r.get('stderr', '') or r.get('error', 'mkdir failed')}
         return {'ok': True}
+
+    def sftp_upload(self, local_path: str, remote_path: str, progress_cb=None) -> dict:
+        """Upload a local file to the remote host via SFTP (binary-safe, no size limit)."""
+        try:
+            remote_dir = remote_path.rsplit('/', 1)[0] if '/' in remote_path else ''
+            if remote_dir:
+                self._exec(f'mkdir -p {shlex.quote(remote_dir)}', '', 10)
+            sftp = self._client.open_sftp()
+            try:
+                sftp.put(local_path, remote_path, callback=progress_cb)
+                return {'ok': True}
+            finally:
+                sftp.close()
+        except Exception as e:
+            # Retry once on connection loss
+            try:
+                self._connect()
+                sftp = self._client.open_sftp()
+                try:
+                    sftp.put(local_path, remote_path, callback=progress_cb)
+                    return {'ok': True}
+                finally:
+                    sftp.close()
+            except Exception as e2:
+                return {'error': f'SFTP upload failed: {e2}'}
+
+    def sftp_download(self, remote_path: str, local_path: str, progress_cb=None) -> dict:
+        """Download a file from the remote host to local filesystem via SFTP (binary-safe)."""
+        try:
+            os.makedirs(os.path.dirname(local_path) or '.', exist_ok=True)
+            sftp = self._client.open_sftp()
+            try:
+                sftp.get(remote_path, local_path, callback=progress_cb)
+                return {'ok': True}
+            finally:
+                sftp.close()
+        except Exception as e:
+            # Retry once on connection loss
+            try:
+                self._connect()
+                sftp = self._client.open_sftp()
+                try:
+                    sftp.get(remote_path, local_path, callback=progress_cb)
+                    return {'ok': True}
+                finally:
+                    sftp.close()
+            except Exception as e2:
+                return {'error': f'SFTP download failed: {e2}'}
 
     def destroy(self) -> dict:
         try:

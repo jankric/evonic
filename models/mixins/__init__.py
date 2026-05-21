@@ -13,6 +13,8 @@ from models.mixins.portals import PortalMixin
 from models.mixins.safety_rules import SafetyRuleMixin
 from models.mixins.oauth_accounts import OAuthAccountMixin
 from models.mixins.attachments import AttachmentsMixin
+from models.mixins.users import UserMixin
+from models.mixins.transfer_jobs import TransferJobMixin
 
 __all__ = [
     'EvaluationMixin',
@@ -30,4 +32,6 @@ __all__ = [
     'SafetyRuleMixin',
     'OAuthAccountMixin',
     'AttachmentsMixin',
+    'UserMixin',
+    'TransferJobMixin',
 ]

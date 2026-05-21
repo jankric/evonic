@@ -82,6 +82,8 @@ CONTINUATION_RE = re.compile("|".join(_CONTINUATION_PATTERNS), re.IGNORECASE)
 _PLANNING_PATTERNS = [
     r"(adalah|berikut) .*?(plan|rencana|draft)",
     r"(apakah .*?setuju|sudah oke)",
+    r"sudah (dibuat|selesai|berhasil|dikerjakan|dikirim|dijadwalkan)",
+    r"\bringkasan\b",
 ]
 PLANNING_RE = re.compile("|".join(_PLANNING_PATTERNS), re.IGNORECASE)
 
@@ -90,6 +92,23 @@ CONTINUATION_NUDGE = (
     "please keep going; if nothing else remains, reply only with [DONE]"
 )
 MAX_CONTINUATION_NUDGES = 3
+
+
+def should_nudge_continuation(content: str, nudge_count: int) -> str:
+    """Decide what the loop should do for a no-tool-call response.
+
+    Returns:
+        "nudge"   – inject a continuation nudge and re-enter the loop
+        "final"   – treat the response as the final answer (PLANNING_RE negated)
+        "none"    – no continuation phrase detected; fall through normally
+    """
+    if not content or nudge_count >= MAX_CONTINUATION_NUDGES:
+        return "none"
+    if not CONTINUATION_RE.search(content):
+        return "none"
+    if PLANNING_RE.search(content):
+        return "final"
+    return "nudge"
 
 
 # ── Emergency compaction ────────────────────────────────────────────────────

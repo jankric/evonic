@@ -1001,7 +1001,9 @@ function colorizeLogEntry(message) {
         bold ? 'font-weight:bold' : ''
     ].filter(Boolean).join(';');
 
-    return `<div class="log-entry"${style ? ` style="${style}"` : ''}>${message}</div>`;
+    const escaped = escapeHtml(message);
+    const withBreaks = escaped.replace(/\n/g, '<br>');
+    return `<div class="log-entry"${style ? ` style="${style}"` : ''}>${withBreaks}</div>`;
 }
 
 function setupLogStream() {
@@ -1022,7 +1024,7 @@ function setupLogStream() {
         .then(data => {
             if (data.messages && data.messages.length > 0) {
                 for (const msg of data.messages) {
-                    const message = msg.replace(/\n/g, '<br>');
+                    const message = msg;
                     logBox.innerHTML += colorizeLogEntry(message);
                 }
                 logBox.scrollTop = logBox.scrollHeight;

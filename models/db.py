@@ -21,10 +21,13 @@ from models.mixins import (
     SafetyRuleMixin,
     OAuthAccountMixin,
     AttachmentsMixin,
+    UserMixin,
+    TransferJobMixin,
 )
 
 
 class Database(
+    UserMixin,
     SchemaMixin,
     EvaluationMixin,
     TestingMixin,
@@ -41,6 +44,7 @@ class Database(
     SafetyRuleMixin,
     OAuthAccountMixin,
     AttachmentsMixin,
+    TransferJobMixin,
 ):
     def __init__(self, db_path: str = config.DB_PATH):
         self.db_path = db_path

@@ -34,11 +34,42 @@ from backend.agent_runtime.llm_response_parser import (
     _CONTINUATION_PATTERNS, CONTINUATION_RE,
     _PLANNING_PATTERNS, PLANNING_RE,
     CONTINUATION_NUDGE, MAX_CONTINUATION_NUDGES,
+    should_nudge_continuation,
 )
 from backend.agent_runtime.llm_tool_executor import MAX_INJECTIONS_PER_LOOP
+from backend.agent_runtime.quality_monitor import (
+    QualityMonitor,
+    check_empty_response as _qm_check_empty,
+    check_hallucinated_tool as _qm_check_hallucinated,
+    check_loop_detection as _qm_check_loop,
+    MAX_CONSECUTIVE_CORRECTIONS as MAX_QM_CORRECTIONS,
+)
+from backend.agent_runtime.output_parser import (
+    has_malformed_calls,
+    detect_all as detect_malformed_tool_calls,
+    build_nudge_message as build_output_parser_nudge,
+)
 
 from models.db import db
 from backend.llm_client import llm_client, strip_thinking_tags, LLMClient, _split_trailing_think_close
+
+# ── Tiktoken-based token counter (cached encoding) ────────────────────────
+_tiktoken_enc = None
+
+def _count_tokens(text: str) -> int:
+    """Count tokens using tiktoken cl100k_base. Falls back to len//4."""
+    global _tiktoken_enc
+    if not text:
+        return 0
+    try:
+        if _tiktoken_enc is None:
+            import tiktoken
+            _tiktoken_enc = tiktoken.get_encoding("cl100k_base")
+        return len(_tiktoken_enc.encode(text))
+    except Exception:
+        return len(text) // 4
+
+
 def _persist_agent_state_split(ms, agent_id, session_id, db_agent_id=None):
     """Persist agent state, splitting per-session vs global fields.
 
@@ -73,6 +104,27 @@ from backend.tools import tool_registry
 from config import (AGENT_MAX_TOOL_ITERATIONS as MAX_TOOL_ITERATIONS,
                     AGENT_MAX_TOOL_RESULT_CHARS as MAX_TOOL_RESULT_CHARS,
                     AGENT_TIMEOUT_RETRIES as MAX_TIMEOUT_RETRIES)
+
+# RTK token compressor — lazy-init, do NOT load on module import
+_rtk_registry = None
+
+
+def _get_rtk_registry():
+    """Lazy-init the RTK compressor registry. Safe to call from hot paths."""
+    global _rtk_registry
+    if _rtk_registry is None:
+        from backend.token_compressor.compressor_registry import get_registry
+        _rtk_registry = get_registry()
+    return _rtk_registry
+
+
+def _extract_command(tool_name: str, args: dict) -> str:
+    """Derive a command hint for compressor filter matching.
+
+    Delegates to backend.token_compressor.extract_command.
+    """
+    from backend.token_compressor.extract_command import extract_command
+    return extract_command(tool_name, args)
 
 
 def run_tool_loop(agent: Dict[str, Any],
@@ -162,6 +214,14 @@ def run_tool_loop(agent: Dict[str, Any],
             if fn and fn not in _existing_fns:
                 tools.append(td)
                 _existing_fns.add(fn)
+
+    # Build available tool names set for hallucinated-tool detection
+    _available_tool_names = {
+        t.get('function', {}).get('name', '')
+        for t in tools
+    }
+    _available_tool_names.discard('')  # remove empty strings if any
+    _logger.debug("Available tools: %d names", len(_available_tool_names))
 
     # Add restored skill tool IDs to assigned_tool_ids for authorization guard
     _assigned = agent_context.get('assigned_tool_ids')
@@ -312,7 +372,9 @@ def run_tool_loop(agent: Dict[str, Any],
     for _pre_inj in _pre_run_interceptors(agent_id, '', messages):
         messages.append(_pre_inj)
 
-    _iteration = 0
+    _iteration = 0          # counts actual tool-call rounds (what the user sees)
+    _llm_call_count = 0      # counts every LLM API call (safety net for non-tool loops)
+    _max_llm_calls = max_tool_iterations * 10  # hard cap on total LLM calls
     _injection_count = 0  # total injections in this loop run (capped to prevent infinite loops)
     # Track whether we've already done a tool-call iteration (kept for future use).
     _had_tool_call_iteration = False
@@ -351,7 +413,12 @@ def run_tool_loop(agent: Dict[str, Any],
             }
 
     while _iteration < max_tool_iterations:
-        _iteration += 1
+        _llm_call_count += 1
+        # Hard cap on total LLM API calls (safety net for non-tool loops like
+        # thinking budget retries, empty response recovery, continuation nudges).
+        if _llm_call_count > _max_llm_calls:
+            _logger.error("Maximum LLM calls reached (%d) without finishing — aborting", _max_llm_calls)
+            break
         # Drain injected user messages from mid-loop injection queue.
         # Multiple queued messages are merged into one to avoid consecutive user turns.
         if inject_queue is not None:
@@ -760,6 +827,46 @@ def run_tool_loop(agent: Dict[str, Any],
         else:
             content = ''
 
+        # ── Thinking Budget Cap (Phase 2) ──────────────────────────────────
+        # Track thinking tokens per turn. If the model spends too much of its
+        # context window deliberating instead of acting, abort the current
+        # response and retry with thinking disabled to force commitment.
+        if _thinking_budget > 0 and not _thinking_budget_aborted:
+            _thinking_text = reasoning_text or thinking or ''
+            _new_tokens = _count_tokens(_thinking_text)
+            _thinking_token_count += _new_tokens
+            if _thinking_token_count > _thinking_budget:
+                _thinking_budget_aborted = True
+                _budget_msg = (
+                    f"Thinking budget exceeded ({_thinking_token_count} > {_thinking_budget} tokens). "
+                    "Aborting turn — retrying with thinking disabled."
+                )
+                _logger.warning("THINKING_BUDGET_EXCEEDED agent=%s session=%s tokens=%d/%d",
+                                agent_id, session_id, _thinking_token_count, _thinking_budget)
+                event_stream.emit('thinking_budget_exceeded', {
+                    'agent_id': agent_id, 'session_id': session_id,
+                    'external_user_id': external_user_id, 'channel_id': channel_id,
+                    'tokens_used': _thinking_token_count, 'budget': _thinking_budget,
+                })
+                # Save the current (aborted) response as intermediate context so
+                # the model sees its own output on the retry.
+                _thinking_budget_nudge = (
+                    "[thinking budget exceeded] Please commit to an implementation "
+                    "now. Stop deliberating and use your tools to make progress."
+                )
+                if reasoning_text:
+                    _asst_abort_msg: Dict[str, Any] = {
+                        "role": "assistant", "content": content or ''
+                    }
+                    _asst_abort_msg["reasoning_content"] = reasoning_text
+                    messages.append(_asst_abort_msg)
+                elif content:
+                    messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": _thinking_budget_nudge})
+                # Yield to ensure clean state transition (setImmediate-style).
+                time.sleep(0)
+                continue
+
         # Fallback: recover tool calls from thinking/CoT content.
         # Covers the case where the model emits <tool_call> XML inside <think> tags
         # or in the separate reasoning_content field (llama.cpp --reasoning mode)
@@ -772,6 +879,23 @@ def run_tool_loop(agent: Dict[str, Any],
                 if cot_calls:
                     tool_calls = qwen_tool_calls_to_openai_format(cot_calls)
                     _logger.debug("Recovered %d tool call(s) from thinking/CoT content", len(tool_calls))
+
+        # --- Output Parser: detect malformed tool calls embedded in text ---
+        # If the model produced no native tool_calls but its text contains
+        # tool-call-like patterns (fenced ```tool blocks, <tool_call> tags,
+        # or bare JSON with name+arguments), nudge it to use native calling.
+        if not tool_calls and raw_content and has_malformed_calls(raw_content):
+            _logger.warning("Malformed tool calls detected in text — injecting nudge")
+            _extracted = detect_malformed_tool_calls(raw_content)
+            _nudge = build_output_parser_nudge(_extracted)
+            messages.append({"role": "assistant", "content": raw_content})
+            messages.append({"role": "user", "content": _nudge})
+            event_stream.emit('output_parser_nudge', {
+                'agent_id': agent_id,
+                'external_user_id': external_user_id, 'channel_id': channel_id,
+                'extracted_count': len(_extracted),
+            })
+            continue
 
         if content:
             is_final = not bool(tool_calls)
@@ -813,10 +937,7 @@ def run_tool_loop(agent: Dict[str, Any],
 
             # Detect continuation phrases: LLM said it will continue but produced no tool calls.
             # Nudge it to keep going; nudge is NOT saved to DB/history.
-            elif content and CONTINUATION_RE.search(content) and _continuation_nudge_count < MAX_CONTINUATION_NUDGES:
-                if PLANNING_RE.search(content):
-                    _logger.debug("Nudge negated by PLANNING_RE — treating as final")
-                    break
+            elif should_nudge_continuation(content, _continuation_nudge_count) == "nudge":
                 _continuation_nudge_count += 1
                 _logger.debug("Continuation phrase detected — nudging LLM (%d/%d)",
                               _continuation_nudge_count, MAX_CONTINUATION_NUDGES)
@@ -984,6 +1105,18 @@ def run_tool_loop(agent: Dict[str, Any],
 
         for tc_idx, tc in enumerate(tool_calls):
             fn_name = tc['function']['name']
+
+            # --- Quality Monitor: hallucinated tool check ---
+            _qm_hallucinated = _qm_check_hallucinated(
+                fn_name, _available_tool_names, _quality_monitor)
+            if _qm_hallucinated:
+                _logger.warning("Hallucinated tool '%s' — injecting correction", fn_name)
+                _parse_failed[tc_idx] = json.dumps({
+                    'error': _qm_hallucinated,
+                })
+                _tool_records.append((tc, fn_name, None, {}))
+                continue
+
             raw_args_str = tc['function'].get('arguments', '')
             try:
                 args = json.loads(raw_args_str)
@@ -1252,6 +1385,8 @@ def run_tool_loop(agent: Dict[str, Any],
                         _tid = f'skill:{loaded_sid}:{fn}'
                         if _tid not in _assigned:
                             _assigned.append(_tid)
+                # Update available tool names so quality monitor doesn't flag injected tools
+                _available_tool_names.update(injected_fns)
 
             # Persistent skill context: capture system_md for re-injection each iteration
             if fn_name == 'use_skill' and isinstance(tool_result, dict) and tool_result.get('system_md'):
@@ -1267,6 +1402,8 @@ def run_tool_loop(agent: Dict[str, Any],
                     fns_to_remove = set(_loaded_lazy_skills.pop(unload_sid))
                     tools[:] = [t for t in tools if t.get('function', {}).get('name', '') not in fns_to_remove]
                     session_skill_tools.get(session_id, {}).pop(unload_sid, None)
+                    # Remove unloaded tool names from available set
+                    _available_tool_names -= fns_to_remove
                 # Remove unloaded tool IDs from assigned_tool_ids
                 _assigned = agent_context.get('assigned_tool_ids')
                 if _assigned is not None and unload_sid:
@@ -1336,33 +1473,33 @@ def run_tool_loop(agent: Dict[str, Any],
             except (TypeError, ValueError):
                 result_str = str(tool_result)
 
-            # Truncate for LLM context; UI also uses this so display matches what LLM sees
-            if len(result_str) > MAX_TOOL_RESULT_CHARS:
-                remaining = len(result_str) - MAX_TOOL_RESULT_CHARS
-                llm_result_str = (result_str[:MAX_TOOL_RESULT_CHARS] +
-                                  f"\n...[truncated — {remaining} chars omitted]")
-            else:
-                llm_result_str = result_str
+            # --- Determine exit_code for compressor ---
+            _exit_code = 0
+            if isinstance(tool_result, dict):
+                _exit_code = tool_result.get('exit_code', 0)
 
-            # Structured result for timeline/UI — mirrors what LLM receives
-            if llm_result_str == result_str:
-                # No truncation: use structured dict for richer display
-                if isinstance(tool_result, dict):
-                    result_dict = tool_result
-                elif isinstance(tool_result, list):
-                    result_dict = {"data": tool_result}
-                elif isinstance(tool_result, str):
-                    result_dict = {"data": tool_result}
+            # --- RTK split-path compression ---
+            try:
+                _cmd = _extract_command(fn_name, args)
+                compressed_str = _get_rtk_registry().compress(_cmd, _exit_code, result_str)
+            except Exception:
+                _logger.warning("RTK compression failed for %r — falling back to truncation", fn_name, exc_info=True)
+                if len(result_str) > MAX_TOOL_RESULT_CHARS:
+                    remaining = len(result_str) - MAX_TOOL_RESULT_CHARS
+                    compressed_str = (result_str[:MAX_TOOL_RESULT_CHARS] +
+                                      f"\n...[truncated — {remaining} chars omitted]")
                 else:
-                    result_dict = {"data": result_str}
+                    compressed_str = result_str
+
+            # Structured result for timeline/UI — always full data, never truncated
+            if isinstance(tool_result, dict):
+                result_dict = tool_result
+            elif isinstance(tool_result, list):
+                result_dict = {"data": tool_result}
+            elif isinstance(tool_result, str):
+                result_dict = {"data": tool_result}
             else:
-                # Truncated: plain string so UI shows exactly what LLM gets
-                result_dict = {"data": llm_result_str}
-                # Preserve small metadata fields so tool-specific UI can still render
-                if isinstance(tool_result, dict):
-                    for _key in ('exit_code', 'execution_time'):
-                        if _key in tool_result:
-                            result_dict[_key] = tool_result[_key]
+                result_dict = {"data": result_str}
 
             has_error = isinstance(tool_result, dict) and ('error' in tool_result or tool_result.get('status') == 'error')
 
@@ -1384,15 +1521,18 @@ def run_tool_loop(agent: Dict[str, Any],
             # Record in trace (for animated bubbles)
             tool_trace.append({"tool": fn_name, "args": args, "result": result_dict})
 
-            # Save tool result message (same as LLM receives, for UI consistency)
-            db.add_chat_message(session_id, 'tool', llm_result_str, tool_call_id=_tc['id'], agent_id=db_agent_id)
+            # --- Split-path output ---
+            # DB gets FULL result_str (for detail view and future re-read)
+            db.add_chat_message(session_id, 'tool', result_str, tool_call_id=_tc['id'], agent_id=db_agent_id)
+            # Chatlog gets FULL content for tool_output display
             chatlog.append({'type': 'tool_output', 'session_id': session_id,
-                            'content': llm_result_str, 'tool_call_id': _tc['id'], 'error': has_error,
+                            'content': result_str, 'tool_call_id': _tc['id'], 'error': has_error,
                             'function': fn_name})
+            # LLM messages get COMPRESSED content (token savings)
             messages.append({
                 "role": "tool",
                 "tool_call_id": _tc['id'],
-                "content": llm_result_str
+                "content": compressed_str
             })
 
             # Sliding-window tool+args loop detection (window=10, threshold=5).
@@ -1416,9 +1556,17 @@ def run_tool_loop(agent: Dict[str, Any],
             if _tool_call_window.count(_tool_call_key) >= 5 and not _tool_args_force_stop_injected:
                 _logger.warning("Loop detected (%d/10 calls in window: %s) — injecting force-stop",
                                _tool_call_window.count(_tool_call_key), fn_name)
+                _qm_loop_msg = _qm_check_loop(
+                    _tool_call_window, fn_name, args,
+                    monitor=_quality_monitor)
                 messages.append({
                     "role": "user",
-                    "content": f"[SYSTEM] URGENT: You have called the tool '{fn_name}' with the same arguments {_tool_call_window.count(_tool_call_key)} times in the last {len(_tool_call_window)} tool calls. STOP and revert to the state where you started. Review your previous results and provide your FINAL answer."
+                    "content": _qm_loop_msg or (
+                        f"[SYSTEM] URGENT: You have called the tool '{fn_name}' with the same "
+                        f"arguments {_tool_call_window.count(_tool_call_key)} times in the last "
+                        f"{len(_tool_call_window)} tool calls. STOP and revert to the state where "
+                        f"you started. Review your previous results and provide your FINAL answer."
+                    ),
                 })
                 _tool_args_force_stop_injected = True
                 _any_force_stop_injected = True
@@ -1428,8 +1576,13 @@ def run_tool_loop(agent: Dict[str, Any],
         if _pool is not None:
             _pool.shutdown(wait=False)
 
+        # Count this as one tool iteration (what the user sees as "iterations")
+        _iteration += 1
+
         # Tool calls executed successfully — reset continuation nudge counter
         _continuation_nudge_count = 0
+        # Reset quality monitor correction counter on successful tool-execution turn
+        _quality_monitor.reset()
 
         # Check B: stop signal check after tool execution, before next LLM call
         if stop_event.is_set():
@@ -1475,9 +1628,9 @@ def run_tool_loop(agent: Dict[str, Any],
         for inj_msg in run_message_interceptors(agent_id, content, messages):
             messages.append(inj_msg)
 
-    _logger.error("Maximum tool iterations reached (%d)", max_tool_iterations)
+    _logger.error("Maximum tool iterations reached (%d tool rounds, %d LLM calls)", _iteration, _llm_call_count)
     error_msg = (
-        f"LLM Error: Maximum tool iterations reached ({max_tool_iterations}). "
+        f"LLM Error: Maximum tool iterations reached ({_iteration} tool rounds, {_llm_call_count} LLM calls). "
         f"The model could not produce a final answer within this limit. "
         f"You can increase this limit in System Settings → General → Max Tool Iterations."
     )

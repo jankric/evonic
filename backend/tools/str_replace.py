@@ -8,6 +8,7 @@ except ImportError:
     _WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from backend.tools._workspace import resolve_workspace_path
+from backend.tools.lib.safety_pipeline import should_skip_safety
 
 
 def str_replace(file_path: str, old_str: str, new_str: str, count: int = 1) -> dict:
@@ -147,6 +148,10 @@ def execute(agent, args: dict) -> dict:
         return {'error': "Missing required argument: 'new_str'"}
     if not old_str:
         return {'error': "'old_str' must not be empty"}
+
+    # Normalise smart quotes in replacement content before applying
+    from backend.normalizer import normalize_code_quotes
+    new_str = normalize_code_quotes(new_str)
 
     # /_self/ path: always route to the agent's local directory on the evonic server.
     from backend.tools._workspace import is_self_path, resolve_self_path

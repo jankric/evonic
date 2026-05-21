@@ -29,6 +29,7 @@ from cli.commands import (
     update_server, setup_wizard, pass_setup,
     doctor_command,
     reconfigure_wizard,
+    backup_command, restore_command, verify_command, list_command,
 )
 
 
@@ -469,6 +470,64 @@ def main():
         description="Force-destroy all Docker sandbox containers managed by evonic (useful after a crash or for cleanup).",
     )
 
+    # --- backup ---
+    backup_parser = subparsers.add_parser(
+        "backup",
+        help="Create a full Evonic backup archive",
+        description="Create a compressed backup of all Evonic data (agents, DB, plugins, config, keys, plans).",
+    )
+    backup_parser.add_argument(
+        "--output", "-o", type=str, default=None,
+        help="Output file or directory (if directory, backup is saved inside with default filename)"
+    )
+    backup_parser.add_argument(
+        "--format", type=str, default="gz", choices=["gz", "bz2", "zip"],
+        help="Compression format: gz (fastest), bz2 (smaller), zip (default: gz)"
+    )
+    backup_parser.add_argument(
+        "--quiet", "-q", action="store_true", default=False,
+        help="Suppress progress output"
+    )
+    backup_parser.add_argument(
+        "--exclude", type=str, action="append", default=None,
+        help="Exclude a file pattern (repeatable)"
+    )
+    backup_parser.add_argument(
+        "--encrypt", action="store_true", default=False,
+        help="Encrypt the backup with AES-256-GCM (passphrase prompted from stdin)"
+    )
+    backup_parser.add_argument(
+        "--verify", type=str, default=None, metavar="FILE",
+        help="Verify a backup archive integrity against its manifest"
+    )
+    backup_parser.add_argument(
+        "--list", type=str, default=None, metavar="FILE",
+        help="List contents of a backup archive without extracting"
+    )
+
+    # --- restore ---
+    restore_parser = subparsers.add_parser(
+        "restore",
+        help="Restore Evonic from a backup archive",
+        description="Restore all Evonic data from a backup archive with rollback safety.",
+    )
+    restore_parser.add_argument(
+        "backup_file",
+        help="Path to the backup archive to restore from"
+    )
+    restore_parser.add_argument(
+        "--dry-run", action="store_true", default=False,
+        help="List files that would be restored without making changes"
+    )
+    restore_parser.add_argument(
+        "--force", action="store_true", default=False,
+        help="Proceed with restore without interactive prompt"
+    )
+    restore_parser.add_argument(
+        "--no-restart", action="store_true", default=False,
+        help="Do not restart the server after restore"
+    )
+
     # --- channel ---
     channel_parser = subparsers.add_parser(
         "channel",
@@ -646,6 +705,26 @@ def main():
             model_rm(args.model_id)
     elif args.command == "clear-sandbox":
         clear_sandbox()
+    elif args.command == "backup":
+        if args.verify:
+            verify_command(args.verify)
+        elif args.list:
+            list_command(args.list)
+        else:
+            backup_command(
+                output=args.output,
+                fmt=args.format,
+                quiet=args.quiet,
+                exclude=args.exclude,
+                encrypt=args.encrypt,
+            )
+    elif args.command == "restore":
+        restore_command(
+            args.backup_file,
+            dry_run=args.dry_run,
+            force=args.force,
+            no_restart=args.no_restart,
+        )
     elif args.command == "channel":
         if args.channel_command is None:
             channel_parser.print_help()

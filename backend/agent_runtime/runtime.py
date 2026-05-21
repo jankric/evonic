@@ -5,6 +5,7 @@ Owns: message queue, worker threads, session locks, skill caches, handle_message
 session lifecycle, agent state management. Delegates heavy lifting to context,
 llm_loop, and summarizer.
 """
+from __future__ import annotations
 
 import logging
 import os
@@ -1435,6 +1436,20 @@ class AgentRuntime:
             # Build agent context for tool backends
             assigned_tool_ids = db.get_agent_tools(db_agent_id)
 
+            # Super agent gets all skill tool IDs automatically — authorization guard
+            # must allow execution of all skill tools without per-skill assignment.
+            if agent.get('is_super'):
+                from backend.skills_manager import skills_manager
+                _all_skill_ids = set()
+                for _sd in skills_manager.get_all_skill_tool_defs():
+                    _tid = _sd.get('id', '')
+                    if _tid:
+                        _all_skill_ids.add(_tid)
+                _existing = set(assigned_tool_ids)
+                for _tid in _all_skill_ids:
+                    if _tid not in _existing:
+                        assigned_tool_ids.append(_tid)
+
             # Resolve workspace: workplace config takes priority over agent.workspace.
             # For cloud workplaces, never fall back to the agent's /workspace path —
             # Evonet runs on the remote device and has its own working directory.
@@ -1678,12 +1693,16 @@ class AgentRuntime:
         )
         self._message_queue.put(task)
 
-    def get_compiled_context(self, agent_id: str) -> dict:
+    def get_compiled_context(self, agent_id: str, user_id: str = None) -> dict:
         """Return the compiled system prompt and tool definitions for an agent."""
-        return _ctx.get_compiled_context(agent_id)
+        return _ctx.get_compiled_context(agent_id, user_id=user_id)
 
     def _build_message_entry(self, msg: dict, agent: dict) -> dict:
-        """Convert a DB message row into an LLM message dict."""
+        """Convert a DB message row into an LLM message dict.
+
+        Safety net: applies RTK compression before falling back to blunt
+        truncation, mirroring the logic in context.py._build_message_entry().
+        """
         entry = {"role": msg["role"]}
         msg_image = None
         if msg.get("metadata") and isinstance(msg["metadata"], dict):
@@ -1699,10 +1718,23 @@ class AgentRuntime:
             entry["content"] = parts
         elif msg.get("content"):
             content = msg["content"]
+            # Safety net: try RTK compression before falling back to blunt truncation
             if msg.get("role") == "tool" and len(content) > MAX_TOOL_RESULT_CHARS:
-                remaining = len(content) - MAX_TOOL_RESULT_CHARS
-                content = (content[:MAX_TOOL_RESULT_CHARS] +
-                           f"\n...[truncated — {remaining} chars omitted; full result saved]")
+                try:
+                    from backend.token_compressor.compressor_registry import get_registry
+                    reg = get_registry()
+                    hint = _ctx.command_hint_from_content(content)
+                    compressed = reg.compress(hint, 0, content)
+                    if compressed != content:
+                        content = compressed
+                except Exception:
+                    pass
+
+                # Still apply blunt truncation if RTK didn't shrink enough
+                if len(content) > MAX_TOOL_RESULT_CHARS:
+                    remaining = len(content) - MAX_TOOL_RESULT_CHARS
+                    content = (content[:MAX_TOOL_RESULT_CHARS] +
+                               f"\n...[truncated — {remaining} chars omitted; full result saved]")
             entry["content"] = content
         if msg.get("tool_calls"):
             entry["tool_calls"] = msg["tool_calls"]
@@ -1764,7 +1796,7 @@ class AgentRuntime:
         if not isinstance(text, str):
             return False
         lowered = text.strip().lower()
-        return any(pat in lowered for pat in cls._APPROVAL_PATTERNS)
+        return bool(cls._APPROVAL_RE.search(lowered))
 
     # ── Cross-session focus helpers ──────────────────────────────────────────
 
@@ -1863,7 +1895,9 @@ class AgentRuntime:
                     _logger.error("send_as_bot channel error: %s", e)
         return True
 
-    def send_as_user(self, session_id: str, text: str) -> bool:
+    def send_as_user(self, session_id: str, text: str,
+                     image_url: str | None = None,
+                     metadata: dict | None = None) -> bool:
         """User perspective: save message as user and trigger agent processing."""
         session = db.get_session_with_details(session_id)
         if not session:
@@ -1916,10 +1950,15 @@ class AgentRuntime:
                 return True
             # Unknown command — fall through to normal LLM processing
 
-        db.add_chat_message(session_id, 'user', text, agent_id=agent_id)
+        meta = {'user_perspective': True}
+        if image_url:
+            meta['image_url'] = image_url
+        if metadata:
+            meta.update(metadata)
+        db.add_chat_message(session_id, 'user', text, agent_id=agent_id, metadata=meta)
         chatlog_manager.get(agent_id, session_id).append(
             {'type': 'user', 'session_id': session_id, 'content': text,
-             'metadata': {'user_perspective': True}})
+             'metadata': meta})
 
         # Invalidate prefetched context — a new message arrived
         self._prefetcher.invalidate(session_id)
@@ -1933,7 +1972,7 @@ class AgentRuntime:
             'external_user_id': external_user_id,
             'channel_id': channel_id,
             'message': text,
-            'image_url': None,
+            'image_url': image_url,
         })
 
         # Enqueue for agent processing (fire-and-forget)

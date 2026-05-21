@@ -60,6 +60,8 @@ html.dark #compiled-prompt-modal .bg-purple-50 { background: #2e1065 !important;
 html.dark #compiled-prompt-modal .bg-blue-50 { background: #172554 !important; }
 html.dark #compiled-prompt-modal .bg-green-50 { background: #052e16 !important; }
 html.dark #compiled-prompt-modal .bg-amber-50 { background: #451a03 !important; }
+html.dark #compiled-prompt-modal .border-purple-200 { border-color: #5b21b6 !important; }
+html.dark #compiled-prompt-modal .border-amber-200 { border-color: #92400e !important; }
 html.dark #compiled-prompt-modal .border-l-purple-400 { border-color: #a78bfa !important; }
 html.dark #compiled-prompt-modal .border-l-blue-400 { border-color: #60a5fa !important; }
 html.dark #compiled-prompt-modal .border-l-green-400 { border-color: #4ade80 !important; }
@@ -73,6 +75,9 @@ html.dark #compiled-prompt-modal .bg-amber-100 { background: #451a03 !important;
 html.dark #compiled-prompt-modal .text-amber-700 { color: #fcd34d !important; }
 html.dark #compiled-prompt-modal .tab-btn { color: #9ca3af !important; }
 html.dark #compiled-prompt-modal .tab-btn:hover { color: #f3f4f6 !important; }
+/* Chevron rotation for collapsible sections */
+#compiled-prompt-modal .chevron { display: inline-block; transition: transform 0.2s ease; }
+#compiled-prompt-modal .chevron.rotated { transform: rotate(90deg); }
 /* Dark mode: Skills tab (selected skill badges) */
 html.dark #tab-skills .bg-white { background: #1f2937 !important; }
 html.dark #tab-skills .border-gray-200 { border-color: #374151 !important; }
@@ -820,7 +825,9 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
 <div id="compiled-prompt-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
     <div class="bg-white dark:bg-gray-800 rounded-xl w-[90%] max-w-[800px] shadow-xl flex flex-col relative" style="max-height: 85vh;">
         <div class="flex justify-between items-center p-5 border-b border-gray-200">
-            <h3 class="text-gray-800 font-semibold dark:text-gray-100">Compiled Context</h3>
+            <h3 class="text-gray-800 font-semibold dark:text-gray-100">Compiled Context
+                <span id="compiled-token-badge" class="hidden text-[10px] font-medium px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-500/30 dark:text-indigo-200 ml-2 align-middle"></span>
+            </h3>
             <button onclick="document.getElementById('compiled-prompt-modal').classList.add('hidden')" class="bg-transparent border-none text-gray-400 text-2xl cursor-pointer hover:text-gray-800">&times;</button>
         </div>
         <!-- Loading Spinner Overlay -->
@@ -841,14 +848,35 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
         <!-- System Prompt Tab -->
         <div id="prompt-tab-prompt" class="p-5 flex-1 overflow-y-auto space-y-4">
             <div>
-                <h4 class="text-sm font-semibold text-gray-700 mb-2">System Prompt</h4>
+                <h4 class="text-sm font-semibold text-gray-700 mb-2 cursor-pointer flex items-center gap-1" onclick="document.getElementById('compiled-prompt-text').classList.toggle('hidden'); this.querySelector('.chevron').classList.toggle('rotated')">
+                    System Prompt
+                    <span class="chevron rotated text-gray-400 text-[10px]">&#9656;</span>
+                    <span id="compiled-sp-tokens" class="text-xs font-normal text-gray-400 ml-1"></span>
+                </h4>
                 <pre id="compiled-prompt-text" class="bg-gray-50 border border-gray-200 rounded-md p-4 text-xs text-gray-700 font-mono whitespace-pre-wrap overflow-x-auto"></pre>
+            </div>
+            <div id="compiled-memories-section" class="hidden">
+                <h4 class="text-sm font-semibold text-gray-700 mb-2 cursor-pointer flex items-center gap-1" onclick="document.getElementById('compiled-memories-text').classList.toggle('hidden'); this.querySelector('.chevron').classList.toggle('rotated')">
+                    Memory
+                    <span class="chevron text-gray-400 text-[10px]">&#9656;</span>
+                    <span id="compiled-mem-tokens" class="text-xs font-normal text-gray-400 ml-1"></span>
+                </h4>
+                <pre id="compiled-memories-text" class="hidden bg-purple-50 border border-purple-200 rounded-md p-4 text-xs text-gray-700 font-mono whitespace-pre-wrap overflow-x-auto"></pre>
+            </div>
+            <div id="compiled-summary-section" class="hidden">
+                <h4 class="text-sm font-semibold text-gray-700 mb-2 cursor-pointer flex items-center gap-1" onclick="document.getElementById('compiled-summary-text').classList.toggle('hidden'); this.querySelector('.chevron').classList.toggle('rotated')">
+                    Prior Conversation Summary
+                    <span class="chevron text-gray-400 text-[10px]">&#9656;</span>
+                    <span id="compiled-sum-tokens" class="text-xs font-normal text-gray-400 ml-1"></span>
+                </h4>
+                <pre id="compiled-summary-text" class="hidden bg-amber-50 border border-amber-200 rounded-md p-4 text-xs text-gray-700 font-mono whitespace-pre-wrap overflow-x-auto"></pre>
             </div>
             <div>
                 <h4 class="text-sm font-semibold text-gray-700 mb-2 cursor-pointer flex items-center gap-1" onclick="document.getElementById('compiled-tools-json').classList.toggle('hidden'); this.querySelector('.chevron').classList.toggle('rotated')">
                     Tool Definitions
                     <span class="chevron text-gray-400 text-[10px] transition-transform">&#9656;</span>
                     <span id="compiled-tools-count" class="text-xs font-normal text-gray-400 ml-1"></span>
+                    <span id="compiled-tool-tokens" class="text-xs font-normal text-gray-400 ml-1"></span>
                 </h4>
                 <pre id="compiled-tools-json" class="hidden bg-gray-50 border border-gray-200 rounded-md p-4 text-xs text-gray-700 font-mono whitespace-pre-wrap overflow-x-auto" style="max-height: 400px;"></pre>
             </div>
@@ -1297,6 +1325,13 @@ $(document).on('keydown', function (e) {
     if (e.key === 'Escape' && _chatFullscreenActive) toggleChatFullscreenMode();
 });
 
+// Click-outside to close compiled-prompt-modal
+$(document).on('click', '#compiled-prompt-modal', function (e) {
+    if (e.target === e.currentTarget) {
+        $(this).addClass('hidden');
+    }
+});
+
 function showTab(name) {
     $('.tab-content').addClass('hidden');
     $('.tab-btn').removeClass('border-indigo-500 text-indigo-600')
@@ -1685,25 +1720,25 @@ function renderToolsList() {
 
     // Warning banner + rows for orphaned tools
     if (orphaned.length > 0) {
-        html += `<div class="tool-row flex items-start gap-2.5 p-3 bg-amber-50 border border-amber-200 rounded-md" data-assigned="true" data-builtin="false" data-tool-id="">
+        html += `<div class="tool-row flex items-start gap-2.5 p-3 bg-amber-50 dark:bg-amber-900/40 border border-amber-200 dark:border-amber-700 rounded-md" data-assigned="true" data-builtin="false" data-tool-id="">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5">
                 <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 6a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 6Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd"/>
             </svg>
             <div>
-                <p class="text-sm font-medium text-amber-800">${orphaned.length} tool(s) missing</p>
-                <p class="text-xs text-amber-600 mt-0.5">The skill providing these tools may have been uninstalled. Remove them or reinstall the skill.</p>
+                <p class="text-sm font-medium text-amber-800 dark:text-amber-200">${orphaned.length} tool(s) missing</p>
+                <p class="text-xs text-amber-600 dark:text-amber-300 mt-0.5">The skill providing these tools may have been uninstalled. Remove them or reinstall the skill.</p>
             </div>
         </div>`;
         html += orphaned.map(id => `
-        <div class="tool-row flex items-center justify-between p-3 bg-amber-50/60 dark:bg-amber-700 rounded-md border border-amber-200"
+        <div class="tool-row flex items-center justify-between p-3 bg-amber-50/60 dark:bg-amber-900/40 rounded-md border border-amber-200 dark:border-amber-700/50"
              data-assigned="true" data-builtin="false" data-tool-id="${escapeHtml(id)}">
             <div class="min-w-0 flex-1 flex items-center gap-2.5">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 text-amber-500 flex-shrink-0">
                     <path fill-rule="evenodd" d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-8-5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 10 5Zm0 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd"/>
                 </svg>
                 <div>
-                    <span class="text-sm font-medium text-amber-700 font-mono">${escapeHtml(id)}</span>
-                    <p class="text-xs text-amber-500">Missing — skill uninstalled</p>
+                    <span class="text-sm font-medium text-amber-700 dark:text-amber-200 font-mono">${escapeHtml(id)}</span>
+                    <p class="text-xs text-amber-500 dark:text-amber-300/70">Missing — skill uninstalled</p>
                 </div>
             </div>
             <button onclick="event.stopPropagation(); removeOrphan('${escapeHtml(id)}')" title="Remove"
@@ -3215,6 +3250,41 @@ async function showCompiledPrompt() {
     document.getElementById('compiled-tools-count').textContent = `(${tools.length} tools)`;
     document.getElementById('compiled-tools-json').textContent = JSON.stringify(tools, null, 2);
 
+    // Token estimates
+    const tokens = data.tokens || {};
+    const spTokens = tokens.system_prompt || 0;
+    const toolTokens = tokens.tool_definitions || 0;
+    const memTokens = tokens.memories || 0;
+    const sumTokens = tokens.summary || 0;
+    const totalTokens = tokens.total || (spTokens + toolTokens + memTokens + sumTokens);
+    document.getElementById('compiled-sp-tokens').textContent = `\u2014 ~${spTokens.toLocaleString()} tokens`;
+    document.getElementById('compiled-tool-tokens').textContent = `\u2014 ~${toolTokens.toLocaleString()} tokens`;
+    document.getElementById('compiled-mem-tokens').textContent = `\u2014 ~${memTokens.toLocaleString()} tokens`;
+    document.getElementById('compiled-sum-tokens').textContent = `\u2014 ~${sumTokens.toLocaleString()} tokens`;
+    const tokenBadge = document.getElementById('compiled-token-badge');
+    tokenBadge.textContent = `~${totalTokens.toLocaleString()} tokens`;
+    tokenBadge.classList.remove('hidden');
+
+    // Long-term Memory section
+    const memSection = document.getElementById('compiled-memories-section');
+    const memText = document.getElementById('compiled-memories-text');
+    if (data.memories) {
+        memSection.classList.remove('hidden');
+        memText.textContent = data.memories;
+    } else {
+        memSection.classList.add('hidden');
+    }
+
+    // Prior Conversation Summary section
+    const sumSection = document.getElementById('compiled-summary-section');
+    const sumText = document.getElementById('compiled-summary-text');
+    if (data.summary) {
+        sumSection.classList.remove('hidden');
+        sumText.textContent = data.summary;
+    } else {
+        sumSection.classList.add('hidden');
+    }
+
     // LLM Request tab
     const badge = document.getElementById('llm-preview-badge');
     badge.classList.toggle('hidden', !llmData.has_summary);
@@ -3250,7 +3320,7 @@ async function showCompiledPrompt() {
         }).join('');
     }
 
-    // Hide spinner and switch to prompt tab
+    // Hide spinner and switch to System Prompt tab by default
     spinner.classList.add('hidden');
     switchPromptTab('prompt');
 }
