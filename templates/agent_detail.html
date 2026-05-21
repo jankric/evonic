@@ -2988,7 +2988,7 @@ async function sendChat() {
             chatUI.appendMessage('error', 'Network error: ' + e.message);
         }
         setChatBusy(false);
-        setTimeout(refreshSessionState, 3000);
+        setTimeout(refreshSessionState, 0);
         setTimeout(refreshAgentState, 1000);
         return;
     }
@@ -3100,8 +3100,8 @@ async function sendChat() {
         chatUI.appendMessage('error', 'Network error: ' + e.message);
     }
     setChatBusy(false);
-    // Refresh summary and agent state after background summarization completes (~2-3s delay)
-    setTimeout(refreshSessionState, 3000);
+    // Refresh summary and agent state after response completes
+    setTimeout(refreshSessionState, 0);
     setTimeout(refreshAgentState, 1000);
 }
 
@@ -3205,7 +3205,7 @@ function pollForResponse(existingThinkingId) {
                 clearInterval(_currentTurn.pollTimer);
                 _currentTurn.pollTimer = null;
                 setChatBusy(false);
-                setTimeout(refreshSessionState, 3000);
+                setTimeout(refreshSessionState, 0);
                 setTimeout(refreshAgentState, 1000);
             }
         } catch(e) { console.error('[pollForResponse]', e); }
@@ -3390,6 +3390,13 @@ async function refreshSessionState() {
                 headerHtml += `<li class="flex items-start gap-1.5"><span class="${color} text-xs mt-0.5">${icon}</span><span class="${textClass} text-xs">${marked.parseInline(t.text)}</span></li>`;
             }
             headerHtml += '</ul></div>';
+        }
+
+        // Build skill badges from agent state
+        const skills = Array.isArray(stateData.loaded_skills) ? stateData.loaded_skills : [];
+        const skBadges = _buildSkillBadges(skills);
+        if (skBadges.hasBadges) {
+            headerHtml += '<div class="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700"><div class="text-gray-500 dark:text-gray-400 font-medium mb-1 text-xs uppercase tracking-wide">📜 ' + skBadges.count + ' Skills:</div><div class="flex flex-wrap gap-1">' + skBadges.html + '</div></div>';
         }
 
         const content = document.getElementById('summary-content');

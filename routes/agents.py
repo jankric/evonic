@@ -1207,13 +1207,32 @@ def api_chat_agent_state(agent_id):
         try:
             from backend.agent_runtime import agent_runtime
             from backend.skills_manager import skills_manager
+            # Start with skills that have tools (inject_tools)
+            seen_skill_ids = set()
             for sk in agent_runtime.get_session_skills(session_id):
                 sk_id = sk['skill_id']
+                seen_skill_ids.add(sk_id)
                 try:
                     name = skills_manager.get_skill_name(sk_id)
                 except Exception:
                     name = sk_id  # fallback to skill_id on error
-                loaded_skills.append({'skill_id': sk_id, 'name': name})
+                loaded_skills.append({
+                    'skill_id': sk_id,
+                    'name': name,
+                    'tool_count': sk.get('tool_count', 0),
+                })
+            # Also include prompt-only skills (system_md only, no inject_tools)
+            for sk_id in agent_runtime._session_skill_mds.get(session_id, {}):
+                if sk_id not in seen_skill_ids:
+                    try:
+                        name = skills_manager.get_skill_name(sk_id)
+                    except Exception:
+                        name = sk_id
+                    loaded_skills.append({
+                        'skill_id': sk_id,
+                        'name': name,
+                        'tool_count': 0,
+                    })
         except Exception:
             pass
     else:

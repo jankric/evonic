@@ -8,19 +8,12 @@ function esc(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// ---- Skill badge debounce state ----
-// Prevents flicker when use_skill / unload_skill fire in quick succession (<1s)
-var _lastSkillCount = 0;
-var _skillsDebounceTimer = null;
-var _skillsDebouncePending = null; // { agentId, userId, containerIds, sessionId, data }
-const SKILL_DEBOUNCE_MS = 800;
-
 /**
  * Build HTML for loaded skill badges.
  * Returns an object: { html, hasBadges }
  */
 function _buildSkillBadges(skills) {
-    if (!skills || skills.length === 0) return { html: '', hasBadges: false };
+    if (!skills || skills.length === 0) return { html: '', hasBadges: false, count: 0 };
 
     var maxVisible = 4;
     var visible = skills.slice(0, maxVisible);
@@ -35,7 +28,7 @@ function _buildSkillBadges(skills) {
         var tooltip = isError ? 'Skill error: failed to load metadata' : (s.tool_count ? s.tool_count + ' tools' : '');
         parts.push(
             '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium' +
-            ' bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 ml-1' +
+            ' bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300 ml-1' +
             errorClass +
             '" style="transition: opacity 0.15s ease"' +
             (tooltip ? ' title="' + esc(tooltip) + '"' : '') +
@@ -49,7 +42,7 @@ function _buildSkillBadges(skills) {
     if (hidden.length > 0) {
         parts.push(
             '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium' +
-            ' bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 ml-1' +
+            ' bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300 ml-1' +
             ' cursor-pointer" style="transition: opacity 0.15s ease"' +
             ' onclick="var p=this.parentElement;var all=p.querySelectorAll(\'.skill-badge-hidden\');' +
             'for(var i=0;i<all.length;i++)all[i].classList.toggle(\'hidden\');' +
@@ -64,7 +57,7 @@ function _buildSkillBadges(skills) {
             var hsTooltip = hsError ? 'Skill error: failed to load metadata' : (hs.tool_count ? hs.tool_count + ' tools' : '');
             parts.push(
                 '<span class="skill-badge-hidden hidden inline-flex items-center px-2 py-0.5 rounded text-xs font-medium' +
-                ' bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 ml-1' +
+                ' bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300 ml-1' +
                 hsErrorClass +
                 '" style="transition: opacity 0.15s ease"' +
                 (hsTooltip ? ' title="' + esc(hsTooltip) + '"' : '') +
@@ -75,20 +68,16 @@ function _buildSkillBadges(skills) {
         }
     }
 
-    return { html: parts.join(''), hasBadges: true };
+    return { html: parts.join(''), hasBadges: true, count: skills.length };
 }
 
 /**
  * Core rendering logic (no debounce).
  */
 function _renderAgentStateCore(containerIds, data) {
-    var skills = Array.isArray(data.loaded_skills) ? data.loaded_skills : [];
-    var badges = _buildSkillBadges(skills);
-
     var empty = '<p class="text-sm text-gray-400 dark:text-gray-500 italic">No state yet.</p>';
     var hasAnyState = data.focus ||
         data.active_model ||
-        badges.hasBadges ||
         (data.states && Object.keys(data.states).length > 0);
     if (!hasAnyState) {
         (Array.isArray(containerIds) ? containerIds : [containerIds]).forEach(function(id) {
@@ -115,11 +104,6 @@ function _renderAgentStateCore(containerIds, data) {
         } else {
             cards += '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 ml-1">Model: ' + esc(am.name) + '</span>';
         }
-    }
-
-    // Active skills badges
-    if (badges.hasBadges) {
-        cards += badges.html;
     }
 
     // Raw JSON for debug
@@ -165,10 +149,7 @@ function _renderAgentStateCore(containerIds, data) {
 }
 
 /**
- * Public entry point with skill-unload debounce.
- * Fetches state API and renders. When skills are removed (unload),
- * rendering is delayed by 800ms to prevent flicker from rapid
- * use_skill / unload_skill cycles.
+ * Public entry point. Fetches state API and renders.
  */
 async function renderAgentState(agentId, userId, containerIds, sessionId) {
     if (!agentId) return;
@@ -178,38 +159,11 @@ async function renderAgentState(agentId, userId, containerIds, sessionId) {
         var res = await fetch(url);
         if (!res.ok) { console.warn('[AgentState] API error:', res.status, res.statusText); return; }
         var data = await res.json();
-
-        var skills = Array.isArray(data.loaded_skills) ? data.loaded_skills : [];
-        var newCount = skills.length;
-
-        clearTimeout(_skillsDebounceTimer);
-
-        if (newCount < _lastSkillCount && _lastSkillCount > 0) {
-            // Skills were removed — debounce rendering to prevent flicker
-            _skillsDebouncePending = { containerIds: containerIds, data: data };
-            _skillsDebounceTimer = setTimeout(function() {
-                _lastSkillCount = newCount;
-                var p = _skillsDebouncePending;
-                _skillsDebouncePending = null;
-                if (p) _renderAgentStateCore(p.containerIds, p.data);
-            }, SKILL_DEBOUNCE_MS);
-            return; // Keep old badges visible during debounce window
-        }
-
-        // Skills increased or stayed same — render immediately
-        _skillsDebouncePending = null;
-        _lastSkillCount = newCount;
         _renderAgentStateCore(containerIds, data);
     } catch (e) { console.error('[AgentState] error:', e); }
 }
 
 function clearAgentState(containerIds) {
-    // Clear any pending debounce
-    clearTimeout(_skillsDebounceTimer);
-    _skillsDebounceTimer = null;
-    _skillsDebouncePending = null;
-    _lastSkillCount = 0;
-
     var empty = '<p class="text-sm text-gray-400 dark:text-gray-500 italic">No state yet.</p>';
     (Array.isArray(containerIds) ? containerIds : [containerIds]).forEach(function(id) {
         var el = document.getElementById(id);
