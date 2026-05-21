@@ -169,8 +169,9 @@ def _register_builtins():
         except Exception:
             is_super = False
         lines = ["**Available commands:**"]
+        super_only = {"restart", "cd", "cwd"}
         for name, desc in commands:
-            if name == "restart" and not is_super:
+            if name in super_only and not is_super:
                 continue
             lines.append(f"- `/{name}` — {desc}")
         return "\n".join(lines)
