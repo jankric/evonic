@@ -702,3 +702,35 @@ def build_message_entry(msg: dict, agent: dict) -> dict:
         if rc:
             entry['reasoning_content'] = rc
     return entry
+
+
+def build_user_identity_context(channel_id: str, external_user_id: str):
+    """Look up the channel user's display name and build an identity context block.
+
+    Returns a string for insertion into the LLM conversation context, or None
+    when the channel has no display name on file for this user.
+    """
+    if not channel_id or not external_user_id:
+        return None
+
+    try:
+        display_name = db.get_user_display_name(channel_id, external_user_id)
+    except Exception:
+        _logger.warning(
+            "Failed to look up display name for channel=%s user=%s",
+            channel_id, external_user_id, exc_info=True,
+        )
+        return None
+
+    if not display_name or display_name == 'unknown':
+        return None
+
+    return (
+        "## Current User\n"
+        f"You are currently speaking with: **{display_name}** "
+        f"(channel user ID: `{external_user_id}`).\n"
+        "This identity is provided by the chat channel and is authoritative "
+        "for this session. If you have previously remembered a different name "
+        "for this user — disregard it. Always address this user as "
+        f"**{display_name}** throughout this conversation."
+    )
