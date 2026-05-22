@@ -31,6 +31,7 @@ from typing import Optional, Union
 
 import json
 import os
+import re
 
 # Project root: two levels up from this file (backend/agent_state.py → project root)
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), '..'))
@@ -47,6 +48,27 @@ STATUS_ICON = {
     "in_progress": "[~]",
     "done": "[x]",
 }
+
+# Regex to strip leading status indicators that LLMs sometimes embed in task text.
+# Matches: ✅, ❌, ✓, ✔, ☐, ☑, ☒, ✗, ✘, ⏳, ⌛, 🔄, ⟳,
+#          [x], [ ], [~], [DONE], [done], [TODO], [WIP],
+#          and optional leading #<id> (already rendered separately by UI).
+_STATUS_PREFIX_RE = re.compile(
+    r'^(?:'
+    r'[\s]*(?:'
+    r'[\u2610\u2611\u2612\u2713\u2714\u2717\u2718\u27f3]'   # ☐☑☒✓✔✗✘⟳
+    r'|[\u23f3\u231b]'                                       # ⏳⌛
+    r'|\u2705|\u274c|\U0001f504'                             # ✅❌🔄
+    r'|\[(?:x|X| |~|DONE|done|TODO|WIP)\]'                  # [x] [ ] [~] [DONE] etc.
+    r')'
+    r')+[\s]*'
+    r'(?:#\d+[\s]*)?'                                        # optional #<id>
+)
+
+
+def _sanitize_task_text(text: str) -> str:
+    """Strip leading status indicators and task IDs that LLMs embed in task text."""
+    return _STATUS_PREFIX_RE.sub('', text, count=1).strip() or text.strip()
 
 
 class AgentState:
@@ -164,7 +186,7 @@ class AgentState:
             for t in tasks:
                 self.tasks.append({
                     "id": self._next_task_id,
-                    "text": str(t),
+                    "text": _sanitize_task_text(str(t)),
                     "status": "pending",
                 })
                 self._next_task_id += 1
@@ -173,7 +195,7 @@ class AgentState:
         if action == "add":
             if not text:
                 return {"error": "Action 'add' requires 'text'."}
-            task = {"id": self._next_task_id, "text": str(text), "status": "pending"}
+            task = {"id": self._next_task_id, "text": _sanitize_task_text(str(text)), "status": "pending"}
             self.tasks.append(task)
             self._next_task_id += 1
             return {"result": f"Task #{task['id']} added.", "task_id": task['id']}
